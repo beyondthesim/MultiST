@@ -1,8 +1,20 @@
 """
 역추세(CT) 전략 파라미터 비교 분석
 
-6가지 CT 설정을 백테스트하여 폭발적 수익 구조 탐색.
+11가지 CT 설정을 백테스트하여 폭발적 수익 구조 탐색.
 메인 전략(factor=5.4, ATR=10)은 고정, CT 파라미터만 변경.
+
+[진단] A_기본의 근본 문제:
+  avg_win=1.56 / avg_loss=3.96 → 손익비 0.39
+  손익분기 승률 = 3.96/(3.96+1.56) = 71.7% → 실제 66%로 불가
+  DCA 2회 → SL 맞으면 3배 포지션이 한번에 손실
+
+[개선 방향] G~K:
+  G_균형형     : TP=SL 수준(3%/5%), DCA 최소화, 손익비 1.5 목표
+  H_노DCA완전  : DCA 없음 + 타이트SL(1.5%) + 와이드TP(2.5%/5%)
+  I_RSI주도청산: RSI 55 청산, TP 12%는 안전망, SL 4%, DCA 1회(극단)
+  J_초선별무DCA: 5연속봉+RSI22, DCA 없음, TP 4%/8%, SL 2.5%
+  K_하이브리드 : RSI25 진입, 극단DCA 1회(RSI15), SL 2%, TP 3%/6%
 
 사용법:
   python ct_compare.py
@@ -83,6 +95,75 @@ CT_VARIANTS = {
         "sl_long_pct": 0.025, "sl_short_pct": 0.025,
         "ct_long_tp":  [{"pct": 0.02, "qty_pct": 50}, {"pct": 0.035, "qty_pct": 100}],
         "ct_short_tp": [{"pct": 0.02, "qty_pct": 50}, {"pct": 0.035, "qty_pct": 100}],
+    },
+
+    # ── 개선 시리즈 (G~K) ───────────────────────────────────────────────────
+    # 핵심: 손익비 수정 → avg_win / |avg_loss| > (1-WR)/WR 조건 충족
+    # A_기본 손익분기 요구 승률: 3.96/(3.96+1.56)=71.7% → 실제 66% → 적자 구조
+    # 목표: SL ≤ TP × (WR/(1-WR)) 또는 TP 대폭 확대로 구조적 흑자 전환
+
+    "G_균형형": {
+        # TP를 SL(2%) 이상으로 맞춤, DCA 극단값(RSI18)만 허용
+        # 손익비 1.5~2.5 목표 → 승률 40%만 넘어도 수익
+        "equity_pct": 30,
+        "rsi_period": 14, "consec_candles": 4,
+        "rsi_long_entry1": 28, "rsi_short_entry1": 72,
+        "rsi_long_exit": 62,   "rsi_short_exit": 38,
+        "max_dca": 1, "rsi_long_dca": [18], "rsi_short_dca": [82],
+        "sl_long_pct": 0.02, "sl_short_pct": 0.02,
+        "ct_long_tp":  [{"pct": 0.03, "qty_pct": 50}, {"pct": 0.05, "qty_pct": 100}],
+        "ct_short_tp": [{"pct": 0.03, "qty_pct": 50}, {"pct": 0.05, "qty_pct": 100}],
+    },
+    "H_노DCA완전": {
+        # DCA 완전 제거 → SL 맞아도 단일 포지션만 손실
+        # SL 1.5% 타이트 → 손실 크기 절반으로 축소
+        # TP 2.5%/5% → 손익비 1.67~3.33
+        "equity_pct": 30,
+        "rsi_period": 14, "consec_candles": 4,
+        "rsi_long_entry1": 28, "rsi_short_entry1": 72,
+        "rsi_long_exit": 60,   "rsi_short_exit": 40,
+        "max_dca": 0, "rsi_long_dca": [], "rsi_short_dca": [],
+        "sl_long_pct": 0.015, "sl_short_pct": 0.015,
+        "ct_long_tp":  [{"pct": 0.025, "qty_pct": 40}, {"pct": 0.05, "qty_pct": 100}],
+        "ct_short_tp": [{"pct": 0.025, "qty_pct": 40}, {"pct": 0.05, "qty_pct": 100}],
+    },
+    "I_RSI주도청산": {
+        # RSI 55 회복 시 즉시 청산 → 반등 끝까지 타기
+        # TP 12%는 안전망(사실상 RSI 청산이 먼저 작동)
+        # SL 4% + DCA 1회(RSI15 극단) → 충분한 여유
+        "equity_pct": 30,
+        "rsi_period": 14, "consec_candles": 4,
+        "rsi_long_entry1": 25, "rsi_short_entry1": 75,
+        "rsi_long_exit": 55,   "rsi_short_exit": 45,
+        "max_dca": 1, "rsi_long_dca": [15], "rsi_short_dca": [85],
+        "sl_long_pct": 0.04, "sl_short_pct": 0.04,
+        "ct_long_tp":  [{"pct": 0.12, "qty_pct": 100}],
+        "ct_short_tp": [{"pct": 0.12, "qty_pct": 100}],
+    },
+    "J_초선별무DCA": {
+        # 5연속 음봉 + RSI22 이하 → 최고 품질 신호만 선별
+        # DCA 없음 → 리스크 고정, TP 4%/8% → 손익비 1.6~3.2
+        "equity_pct": 30,
+        "rsi_period": 14, "consec_candles": 5,
+        "rsi_long_entry1": 22, "rsi_short_entry1": 78,
+        "rsi_long_exit": 60,   "rsi_short_exit": 40,
+        "max_dca": 0, "rsi_long_dca": [], "rsi_short_dca": [],
+        "sl_long_pct": 0.025, "sl_short_pct": 0.025,
+        "ct_long_tp":  [{"pct": 0.04, "qty_pct": 50}, {"pct": 0.08, "qty_pct": 100}],
+        "ct_short_tp": [{"pct": 0.04, "qty_pct": 50}, {"pct": 0.08, "qty_pct": 100}],
+    },
+    "K_하이브리드": {
+        # 최적 조합: RSI25 진입, RSI15 극단 DCA 1회, SL 2%, TP 3%/6%
+        # RSI58 회복 → 빠른 출구로 CT_EXIT 수익 극대화
+        # 손익비 1.5~3.0, DCA 단 1회로 리스크 제한
+        "equity_pct": 30,
+        "rsi_period": 14, "consec_candles": 4,
+        "rsi_long_entry1": 25, "rsi_short_entry1": 75,
+        "rsi_long_exit": 58,   "rsi_short_exit": 42,
+        "max_dca": 1, "rsi_long_dca": [15], "rsi_short_dca": [85],
+        "sl_long_pct": 0.02, "sl_short_pct": 0.02,
+        "ct_long_tp":  [{"pct": 0.03, "qty_pct": 40}, {"pct": 0.06, "qty_pct": 100}],
+        "ct_short_tp": [{"pct": 0.03, "qty_pct": 40}, {"pct": 0.06, "qty_pct": 100}],
     },
 }
 
@@ -179,20 +260,26 @@ def main():
         # CT 단독 성과
         ct_m = _simple_ct_metrics(ct_trades, ct_init)
 
-        print(f"  완료 (CT {len(ct_trades)}건, PF={ct_m['pf']:.3f})")
+        # 손익비 & 손익분기 승률 계산
+        rr = abs(ct_m['avg_win'] / ct_m['avg_loss']) if ct_m['avg_loss'] != 0 else float('inf')
+        be_wr = 1 / (1 + rr) * 100 if rr != float('inf') else 0  # 손익분기 승률
+
+        print(f"  완료 (CT {len(ct_trades)}건, PF={ct_m['pf']:.3f}, R/R={rr:.2f}, 손익분기WR={be_wr:.0f}%)")
 
         summary_rows.append({
-            "설정":        name,
-            "CT건수":      ct_m["n"],
-            "CT승률(%)":   f"{ct_m['wr']:.1f}",
-            "CT손익(USDT)":f"{ct_m['net_pnl']:+.1f}",
-            "CT수익(%)":   f"{ct_m['net_pct']:+.1f}",
-            "CT_PF":       f"{ct_m['pf']:.3f}" if ct_m['pf'] != float('inf') else "∞",
-            "평균수익":    f"{ct_m['avg_win']:+.2f}",
-            "평균손실":    f"{ct_m['avg_loss']:+.2f}",
-            "DCA건":       ct_m["dca_trades"],
-            "TP/SL/CTX":   f"{ct_m['tp_exits']}/{ct_m['sl_exits']}/{ct_m['ct_exits']}",
-            "합산수익(%)": f"{combined_pct:+.1f}",
+            "설정":         name,
+            "CT건수":       ct_m["n"],
+            "CT승률(%)":    f"{ct_m['wr']:.1f}",
+            "R/R":          f"{rr:.2f}" if rr != float('inf') else "∞",
+            "손익분기WR":   f"{be_wr:.0f}%",
+            "CT_PF":        f"{ct_m['pf']:.3f}" if ct_m['pf'] != float('inf') else "∞",
+            "CT손익(USDT)": f"{ct_m['net_pnl']:+.1f}",
+            "CT수익(%)":    f"{ct_m['net_pct']:+.1f}",
+            "평균수익":     f"{ct_m['avg_win']:+.2f}",
+            "평균손실":     f"{ct_m['avg_loss']:+.2f}",
+            "DCA건":        ct_m["dca_trades"],
+            "TP/SL/CTX":    f"{ct_m['tp_exits']}/{ct_m['sl_exits']}/{ct_m['ct_exits']}",
+            "합산수익(%)":  f"{combined_pct:+.1f}",
         })
 
     # ── 결과 출력 ──────────────────────────────────────────────────────────
@@ -204,9 +291,10 @@ def main():
     # ── 퀀트 판단 기준 출력 ─────────────────────────────────────────────
     print(f"\n{'─'*70}")
     print("  [퀀트 판단 기준]")
-    print("  CT PF > 1.0  : 수익 구조  |  PF > 1.2: 우수  |  PF > 1.5: 탁월")
-    print("  CT 수익(%) > 0: 수익 전략  |  > 30%: 메인 보완 가능")
-    print("  평균수익 / |평균손실| > 손익비  ↔  승률 충족 여부 체크")
+    print("  R/R (손익비)  : avg_win / |avg_loss|")
+    print("  손익분기 승률: 1/(1+R/R)  →  실제승률 > 손익분기승률 이어야 수익")
+    print("  PF > 1.0: 수익  |  PF > 1.2: 우수  |  PF > 1.5: 탁월")
+    print("  합산수익이 가장 높은 설정이 메인 전략과의 시너지 최대")
     print(f"{'─'*70}")
 
     # 최우수 설정 추천

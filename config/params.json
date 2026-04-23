@@ -54,28 +54,28 @@
     "equity_pct": 30,
 
     "rsi_period": 14,
-    "consec_candles": 4,
+    "consec_candles": 5,
 
-    "rsi_long_entry1":  30,
-    "rsi_short_entry1": 70,
+    "rsi_long_entry1":  22,
+    "rsi_short_entry1": 78,
 
-    "rsi_long_exit":  65,
-    "rsi_short_exit": 35,
+    "rsi_long_exit":  60,
+    "rsi_short_exit": 40,
 
-    "max_dca": 2,
-    "rsi_long_dca":  [22, 15],
-    "rsi_short_dca": [78, 85],
+    "max_dca": 0,
+    "rsi_long_dca":  [],
+    "rsi_short_dca": [],
 
-    "sl_long_pct":  0.03,
-    "sl_short_pct": 0.03,
+    "sl_long_pct":  0.025,
+    "sl_short_pct": 0.025,
 
     "ct_long_tp": [
-      { "pct": 0.015, "qty_pct": 50  },
-      { "pct": 0.025, "qty_pct": 100 }
+      { "pct": 0.04, "qty_pct": 50  },
+      { "pct": 0.08, "qty_pct": 100 }
     ],
     "ct_short_tp": [
-      { "pct": 0.015, "qty_pct": 50  },
-      { "pct": 0.025, "qty_pct": 100 }
+      { "pct": 0.04, "qty_pct": 50  },
+      { "pct": 0.08, "qty_pct": 100 }
     ]
   }
 }
