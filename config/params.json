@@ -1,0 +1,81 @@
+{
+  "symbol": "PI/USDT:USDT",
+  "exchange": "okx",
+  "timeframe": "12m",
+  "start_date": "2025-04-11",
+  "end_date": "2026-04-11",
+
+  "st1": { "atr_period": 10, "factor": 5.4 },
+  "st2": { "atr_period": 10, "factor": 5.4 },
+
+  "rsi_filter": {
+    "enabled": true,
+    "rsi_length": 14,
+    "rsi_ma_length": 2,
+    "long_block": 80,
+    "long_unblock": 65,
+    "short_block": 25,
+    "short_unblock": 40
+  },
+
+  "grad_filter": {
+    "enabled": true,
+    "bb_length": 50,
+    "bb_mult": 2.0,
+    "threshold_pct": 0.06
+  },
+
+  "long_tp": [
+    { "pct": 0.03, "qty_pct": 50  },
+    { "pct": 0.05, "qty_pct": 100 },
+    { "pct": 0.05, "qty_pct": 20  },
+    { "pct": 0.08, "qty_pct": 25  },
+    { "pct": 0.12, "qty_pct": 30  },
+    { "pct": 0.16, "qty_pct": 100 }
+  ],
+
+  "short_tp": [
+    { "pct": 0.03, "qty_pct": 50  },
+    { "pct": 0.05, "qty_pct": 100 },
+    { "pct": 0.04, "qty_pct": 20  },
+    { "pct": 0.07, "qty_pct": 25  },
+    { "pct": 0.10, "qty_pct": 30  },
+    { "pct": 0.13, "qty_pct": 100 }
+  ],
+
+  "long_sl_pct":  0.03,
+  "short_sl_pct": 0.03,
+
+  "initial_capital": 1000,
+  "commission_pct":  0.05,
+
+  "counter_trend": {
+    "enabled": true,
+    "equity_pct": 30,
+
+    "rsi_period": 14,
+    "consec_candles": 4,
+
+    "rsi_long_entry1":  30,
+    "rsi_short_entry1": 70,
+
+    "rsi_long_exit":  65,
+    "rsi_short_exit": 35,
+
+    "max_dca": 2,
+    "rsi_long_dca":  [22, 15],
+    "rsi_short_dca": [78, 85],
+
+    "sl_long_pct":  0.03,
+    "sl_short_pct": 0.03,
+
+    "ct_long_tp": [
+      { "pct": 0.015, "qty_pct": 50  },
+      { "pct": 0.025, "qty_pct": 100 }
+    ],
+    "ct_short_tp": [
+      { "pct": 0.015, "qty_pct": 50  },
+      { "pct": 0.025, "qty_pct": 100 }
+    ]
+  }
+}

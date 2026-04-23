@@ -1,0 +1,35 @@
+# 캐시 / 대용량 파일
+data/cache/
+*.parquet
+
+# 결과 파일
+results/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 환경 변수
+.env
+.env.*
+*.secret
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ruff
+.ruff_cache/
