@@ -43,11 +43,11 @@ def reconcile_positions(client: OKXClient, symbol: str, state: dict) -> None:
     real_long  = real["long"]  is not None
     real_short = real["short"] is not None
 
-    bot_long_active  = (
+    bot_long_active  = bool(
         (state.get("main") and state["main"]["side"] == "long") or
         (state.get("ct")   and state["ct"]["side"]   == "long")
     )
-    bot_short_active = (
+    bot_short_active = bool(
         (state.get("main") and state["main"]["side"] == "short") or
         (state.get("ct")   and state["ct"]["side"]   == "short")
     )

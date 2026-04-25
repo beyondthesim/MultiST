@@ -358,9 +358,25 @@ class BacktestEngine:
         timestamps = list(df.index)
         weekday_only = self.params.get("weekday_only", False)
 
+        # 안전 한도 옵션 (0 = 비활성)
+        daily_loss_limit = float(self.params.get("daily_loss_pct_limit", 0))
+        max_dd_limit     = float(self.params.get("max_dd_pct_limit", 0))
+        peak_eq          = main_equity + ct_equity
+        daily_start_eq   = peak_eq
+        last_day_str     = ""
+        halted           = False
+        daily_locked     = False
+
         for ts in timestamps:
             bar = bars[ts]
             is_weekday = ts.weekday() < 5
+
+            # 일일 시작 자본 갱신 (UTC 자정 기준)
+            day_str = ts.strftime("%Y-%m-%d")
+            if day_str != last_day_str:
+                daily_start_eq = main_equity + ct_equity
+                last_day_str   = day_str
+                daily_locked   = False
 
             # ── 메인 포지션 처리 ──────────────────────────────────────
             if position is not None:
@@ -495,7 +511,7 @@ class BacktestEngine:
             ct_open_base   = current_eq * ct_pos_pct   / 100.0 if ct_pos_pct   > 0 else ct_base_equity
 
             # ── 메인 신규 진입 ────────────────────────────────────────
-            if position is None:
+            if position is None and not halted and not daily_locked:
                 can_enter = (not weekday_only) or is_weekday
                 if can_enter:
                     if bar["long_entry"]:
@@ -504,7 +520,7 @@ class BacktestEngine:
                         position = self._open_trade(-1, bar, ts, main_open_size)
 
             # ── 역추세 신규 진입 ──────────────────────────────────────
-            if ct_enabled and ct_position is None:
+            if ct_enabled and ct_position is None and not halted and not daily_locked:
                 ct_can = (not weekday_only) or is_weekday
                 if ct_can:
                     if bar.get("ct_long_entry", False):
@@ -519,6 +535,31 @@ class BacktestEngine:
             if ct_position is not None:
                 total_eq += ct_position.unrealized_pnl(bar["close"])
             eq_curve.append({"timestamp": ts, "equity": total_eq})
+
+            # ── 안전 한도 체크 (라이브 봇과 동일 로직) ────────────────
+            if max_dd_limit > 0 or daily_loss_limit > 0:
+                peak_eq = max(peak_eq, total_eq)
+                # MDD 한도: 모든 포지션 강제 청산 + 봇 정지
+                if max_dd_limit > 0 and not halted:
+                    dd_pct = (total_eq - peak_eq) / peak_eq * 100
+                    if dd_pct <= -max_dd_limit:
+                        if position is not None:
+                            position.close_full(bar["close"], "MDD_HALT", ts)
+                            main_equity += position.net_pnl
+                            main_trades.append(position.to_dict())
+                            position = None
+                        if ct_position is not None:
+                            ct_position.close_full(bar["close"], "MDD_HALT", ts)
+                            ct_equity   += ct_position.net_pnl
+                            ct_trades.append(ct_position.to_dict())
+                            ct_position = None
+                            ct_per_entry = 0.0
+                        halted = True
+                # 일일 손실 한도: 당일 신규 진입 차단 (보유 포지션은 유지)
+                if daily_loss_limit > 0 and not daily_locked:
+                    pnl_today = (total_eq - daily_start_eq) / daily_start_eq * 100
+                    if pnl_today <= -daily_loss_limit:
+                        daily_locked = True
 
         # 미결 포지션: 마지막 close로 강제 청산
         last_bar = bars[timestamps[-1]]

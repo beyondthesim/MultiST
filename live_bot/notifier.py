@@ -48,10 +48,6 @@ def info(msg: str) -> None:
     _log.info(msg)
 
 
-def trade(msg: str) -> None:
-    _log.info(f"[TRADE] {msg}")
-
-
 def warn(msg: str) -> None:
     _log.warning(f"[WARN] {msg}")
 
@@ -61,9 +57,16 @@ def error(msg: str) -> None:
 
 
 def alert(msg: str) -> None:
-    """긴급 알림 — 텔레그램 토큰 있으면 푸시도 시도"""
+    """긴급 알림 — 텔레그램/디스코드 모두 시도"""
     _log.error(f"[ALERT] {msg}")
     _try_telegram(f"🚨 {msg}")
+    _try_discord(f":rotating_light: **ALERT** {msg}")
+
+
+def trade(msg: str) -> None:
+    """거래 발생 알림 — 디스코드로도 전송"""
+    _log.info(f"[TRADE] {msg}")
+    _try_discord(f":moneybag: {msg}")
 
 
 def _try_telegram(msg: str) -> None:
@@ -79,3 +82,24 @@ def _try_telegram(msg: str) -> None:
         urllib.request.urlopen(url, data, timeout=5)
     except Exception as e:
         _log.error(f"텔레그램 전송 실패: {e}")
+
+
+def _try_discord(msg: str) -> None:
+    """DISCORD_URL 환경변수에 웹훅 URL이 있으면 메시지 전송"""
+    url = os.getenv("DISCORD_URL", "").strip().strip('"')
+    if not url:
+        return
+    try:
+        import json as _json
+        import urllib.request
+        data = _json.dumps({"content": msg[:1900]}).encode()
+        req = urllib.request.Request(
+            url, data=data,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent":   "MultiST-LiveBot/1.0 (Python urllib)",
+            },
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        _log.error(f"디스코드 전송 실패: {e}")
