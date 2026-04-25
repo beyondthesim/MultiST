@@ -45,6 +45,7 @@ class Trade:
     units: float = field(init=False)
     remaining_units: float = field(init=False)
     entry_commission: float = field(init=False)
+    last_entry_price: float = field(init=False)   # 마지막 진입가 (DCA 가격 트리거용)
     closes: list = field(default_factory=list)
     exit_time: Optional[pd.Timestamp] = None
     close_reason: str = ""
@@ -54,6 +55,7 @@ class Trade:
         self.units = self.entry_equity / self.entry_price
         self.remaining_units = self.units
         self.entry_commission = self.entry_equity * self.commission_rate
+        self.last_entry_price = self.entry_price
 
     # ── DCA 추가 진입 ─────────────────────────────────────────────────
     def add_entry(
@@ -72,6 +74,7 @@ class Trade:
         self.entry_price = total_cost / self.remaining_units
         self.entry_equity += add_equity
         self.entry_commission += add_commission
+        self.last_entry_price = add_price   # 마지막 DCA 가격 기록
         self.dca_count += 1
 
         # 새 평균단가 기준으로 TP 재계산
@@ -243,32 +246,43 @@ class BacktestEngine:
         ts: pd.Timestamp,
         ct_equity: float,
     ) -> tuple["Trade", float]:
-        """CT 포지션 오픈. (Trade, per_entry_size) 반환"""
-        ct_cfg   = self.params["counter_trend"]
-        max_dca  = ct_cfg.get("max_dca", 2)
-        per_entry = ct_equity / (max_dca + 1)
+        """
+        CT 포지션 오픈. (Trade, per_unit_size) 반환.
 
-        tp_key  = "ct_long_tp" if direction == 1 else "ct_short_tp"
-        tp_pcts = ct_cfg[tp_key]
-        tp_list = [
-            {
-                "price":   bar["close"] * (1 + direction * tp["pct"]),
-                "qty_pct": tp["qty_pct"],
-            }
-            for tp in tp_pcts
+        Safe9 DCA 가중치 방식:
+          dca_weights = [1,1,1,1,2,3,5,8,13] (파인스크립트 Safe9)
+          total_weight = 1(첫진입) + sum(weights[:max_dca])
+          per_unit = ct_equity / total_weight
+          첫 진입: per_unit × 1
+          k차 DCA: per_unit × dca_weights[k]
+        """
+        ct_cfg      = self.params["counter_trend"]
+        max_dca     = ct_cfg.get("max_dca", 4)
+        dca_weights = ct_cfg.get("dca_weights", [1, 1, 1, 1, 2, 3, 5, 8, 13])
+        used_w      = dca_weights[:max_dca]
+        total_w     = 1 + sum(used_w)
+        per_unit    = ct_equity / total_w  # 1 가중치 단위 크기
+
+        # ct_long_tp / ct_short_tp 기준으로 TP 설정 (없으면 all_close_pct 단일 TP)
+        tp_key    = "ct_long_tp" if direction == 1 else "ct_short_tp"
+        fallback  = [{"pct": ct_cfg.get("all_close_pct", 0.04), "qty_pct": 100}]
+        tp_config = ct_cfg.get(tp_key, fallback)
+        ep        = bar["close"]
+        tp_list   = [
+            {"price": ep * (1 + direction * tp["pct"]), "qty_pct": tp["qty_pct"]}
+            for tp in tp_config
         ]
-        tp_list.sort(key=lambda x: x["price"], reverse=(direction == -1))
 
         trade = Trade(
             direction       = direction,
             entry_price     = bar["close"],
             entry_time      = ts,
-            entry_equity    = per_entry,
+            entry_equity    = per_unit,
             commission_rate = self.commission_rate,
             tp_levels       = tp_list,
             strategy        = "ct",
         )
-        return trade, per_entry
+        return trade, per_unit
 
     # ── 포지션 TP 처리 (공통) ─────────────────────────────────────────
     @staticmethod
@@ -285,6 +299,8 @@ class BacktestEngine:
             else:
                 remaining_tps.append(tp)
         position.tp_levels = remaining_tps
+        if not position.is_open and not position.close_reason:
+            position.close_reason = "TP"
 
     # ── 메인 백테스트 루프 ───────────────────────────────────────────
     def run(
@@ -305,17 +321,30 @@ class BacktestEngine:
         ct_equity_pct = ct_cfg.get("equity_pct", 30) / 100.0 if ct_enabled else 0.0
         initial       = self.params["initial_capital"]
 
-        main_equity = initial * (1.0 - ct_equity_pct)
-        ct_equity   = initial * ct_equity_pct
+        # equity_pct=0 → 레버리지 모드: 자본 분할 없이 메인·CT 모두 초기 자본 전체로 포지션
+        # ct_size_pct: 레버리지 모드에서 CT 진입 사이즈를 메인 대비 축소 (기본 100% = 메인과 동일)
+        ct_size_pct = ct_cfg.get("ct_size_pct", 100) / 100.0 if ct_enabled else 1.0
+        if ct_enabled and ct_equity_pct == 0:
+            main_equity    = initial
+            ct_equity      = 0.0
+            ct_base_equity = initial * ct_size_pct
+        else:
+            main_equity    = initial * (1.0 - ct_equity_pct)
+            ct_equity      = initial * ct_equity_pct
+            ct_base_equity = initial * ct_equity_pct  # 포지션 사이징 기준 (고정)
 
         long_sl_pct  = self.params["long_sl_pct"]
         short_sl_pct = self.params["short_sl_pct"]
         ct_sl_long   = ct_cfg.get("sl_long_pct",  0.03)
         ct_sl_short  = ct_cfg.get("sl_short_pct", 0.03)
 
-        ct_max_dca              = ct_cfg.get("max_dca", 2)
-        ct_long_dca_thresholds  = ct_cfg.get("rsi_long_dca",  [22, 15])
-        ct_short_dca_thresholds = ct_cfg.get("rsi_short_dca", [78, 85])
+        ct_max_dca      = ct_cfg.get("max_dca", 4)
+        ct_dca_weights  = ct_cfg.get("dca_weights", [1, 1, 1, 1, 2, 3, 5, 8, 13])
+        ct_dca_price_pct      = ct_cfg.get("dca_price_pct", 0.013)
+        ct_dca_require_div    = ct_cfg.get("dca_require_divergence", True)
+        ct_all_close_pct      = ct_cfg.get("all_close_pct",    0.04)
+        ct_safe_close_count   = ct_cfg.get("safe_close_count", 3)
+        ct_safe_close_pct     = ct_cfg.get("safe_close_pct",   0.02)
 
         main_trades: list[dict] = []
         ct_trades:   list[dict] = []
@@ -368,34 +397,55 @@ class BacktestEngine:
 
             # ── 역추세 포지션 처리 ────────────────────────────────────
             if ct_enabled and ct_position is not None:
-                ct_tp_key  = "ct_long_tp" if ct_position.direction == 1 else "ct_short_tp"
-                ct_tp_pcts = ct_cfg[ct_tp_key]
+                d = ct_position.direction
+                avg_p = ct_position.entry_price
 
-                self._process_tp(ct_position, bar, ts)
-
-                if not ct_position.is_open:
-                    ct_position.close_reason = "TP_FULL"
-                    ct_equity   += ct_position.net_pnl
-                    ct_trades.append(ct_position.to_dict())
-                    ct_position  = None
-                    ct_per_entry = 0.0
-
-                if ct_position is not None:
-                    ct_sl_pct = ct_sl_long if ct_position.direction == 1 else ct_sl_short
-                    if ct_position.direction == 1:
-                        sl_hit = bar["close"] < ct_position.entry_price * (1 - ct_sl_pct)
-                    else:
-                        sl_hit = bar["close"] > ct_position.entry_price * (1 + ct_sl_pct)
-
-                    if sl_hit:
-                        ct_position.close_full(bar["close"], "SL", ts)
+                # 1) 다단계 TP (ct_long_tp / ct_short_tp, _process_tp 공통 처리)
+                if ct_position.tp_levels:
+                    self._process_tp(ct_position, bar, ts)
+                    if not ct_position.is_open:
                         ct_equity   += ct_position.net_pnl
                         ct_trades.append(ct_position.to_dict())
                         ct_position  = None
                         ct_per_entry = 0.0
 
+                # 2) safe_close TP (DCA ≥ N회 후 낮은 TP로 빠른 탈출)
+                if ct_position is not None and ct_position.dca_count >= ct_safe_close_count:
+                    avg_p = ct_position.entry_price
+                    if d == 1:
+                        safe_price = avg_p * (1 + ct_safe_close_pct)
+                        safe_hit   = bar["high"] >= safe_price
+                    else:
+                        safe_price = avg_p * (1 - ct_safe_close_pct)
+                        safe_hit   = bar["low"] <= safe_price
+
+                    if safe_hit:
+                        ct_position.close_full(safe_price, "TP_SAFE", ts)
+                        ct_equity   += ct_position.net_pnl
+                        ct_trades.append(ct_position.to_dict())
+                        ct_position  = None
+                        ct_per_entry = 0.0
+
+                # 3) 하드 SL (봉 내 low/high 터치 시 SL 가격에 청산)
                 if ct_position is not None:
-                    close_col = "ct_close_long" if ct_position.direction == 1 else "ct_close_short"
+                    ct_sl_pct = ct_sl_long if d == 1 else ct_sl_short
+                    if d == 1:
+                        sl_price = ct_position.entry_price * (1 - ct_sl_pct)
+                        sl_hit   = bar["low"] <= sl_price
+                    else:
+                        sl_price = ct_position.entry_price * (1 + ct_sl_pct)
+                        sl_hit   = bar["high"] >= sl_price
+
+                    if sl_hit:
+                        ct_position.close_full(sl_price, "SL", ts)
+                        ct_equity   += ct_position.net_pnl
+                        ct_trades.append(ct_position.to_dict())
+                        ct_position  = None
+                        ct_per_entry = 0.0
+
+                # 4) CT_EXIT (ST 역전 or RSI 회복)
+                if ct_position is not None:
+                    close_col = "ct_close_long" if d == 1 else "ct_close_short"
                     if bar.get(close_col, False):
                         ct_position.close_full(bar["close"], "CT_EXIT", ts)
                         ct_equity   += ct_position.net_pnl
@@ -403,42 +453,64 @@ class BacktestEngine:
                         ct_position  = None
                         ct_per_entry = 0.0
 
-            # ── 역추세 DCA 체크 ───────────────────────────────────────
+            # ── 역추세 DCA 체크 (가격 기반 + RSI 다이버전스) ──────────
             if (ct_enabled and ct_position is not None
                     and ct_position.dca_count < ct_max_dca
                     and ct_per_entry > 0):
                 next_idx = ct_position.dca_count
-                ct_tp_key  = "ct_long_tp" if ct_position.direction == 1 else "ct_short_tp"
-                ct_tp_pcts = ct_cfg[ct_tp_key]
-                rsi_val    = bar.get("ct_rsi", 50.0)
+                d        = ct_position.direction
 
-                if ct_position.direction == 1:
-                    thresh = ct_long_dca_thresholds[next_idx] if next_idx < len(ct_long_dca_thresholds) else -1
-                    dca_ok = rsi_val <= thresh
+                # 가격 조건: 직전 매수가 대비 dca_price_pct% 추가 하락
+                last_p = ct_position.last_entry_price
+                if d == 1:
+                    price_ok = bar["close"] < last_p * (1 - ct_dca_price_pct)
                 else:
-                    thresh = ct_short_dca_thresholds[next_idx] if next_idx < len(ct_short_dca_thresholds) else 101
-                    dca_ok = rsi_val >= thresh
+                    price_ok = bar["close"] > last_p * (1 + ct_dca_price_pct)
 
-                if dca_ok:
-                    ct_position.add_entry(bar["close"], ct_per_entry, ct_tp_pcts)
+                # 다이버전스 조건 (선택)
+                if ct_dca_require_div:
+                    div_col = "rsi_bull_div" if d == 1 else "rsi_bear_div"
+                    div_ok  = bool(bar.get(div_col, False))
+                else:
+                    div_ok = True
+
+                if price_ok and div_ok:
+                    # Safe9 가중치로 DCA 금액 결정
+                    weight = ct_dca_weights[next_idx] if next_idx < len(ct_dca_weights) else 1
+                    dca_amount = ct_per_entry * weight
+
+                    # TP 리스트: 첫 진입과 동일한 방향별 TP 유지 (DCA 후에도 일관된 익절 전략)
+                    tp_key   = "ct_long_tp" if d == 1 else "ct_short_tp"
+                    fallback = [{"pct": ct_all_close_pct, "qty_pct": 100}]
+                    tp_pcts  = ct_cfg.get(tp_key, fallback)
+                    ct_position.add_entry(bar["close"], dca_amount, tp_pcts)
+
+            # ── 동적 명목 사이징 (옵션: 자본의 % × 레버리지) ──────────
+            # main_position_pct: 자본 대비 메인 명목 % (예: 200 = 자본 × 2)
+            # ct_position_pct:   자본 대비 CT 풀 사이클 명목 % (DCA 10회 모두 시)
+            main_pos_pct = self.params.get("main_position_pct", 0)
+            ct_pos_pct   = ct_cfg.get("ct_position_pct", 0)
+            current_eq   = main_equity + ct_equity
+            main_open_size = current_eq * main_pos_pct / 100.0 if main_pos_pct > 0 else main_equity
+            ct_open_base   = current_eq * ct_pos_pct   / 100.0 if ct_pos_pct   > 0 else ct_base_equity
 
             # ── 메인 신규 진입 ────────────────────────────────────────
             if position is None:
                 can_enter = (not weekday_only) or is_weekday
                 if can_enter:
                     if bar["long_entry"]:
-                        position = self._open_trade(1, bar, ts, main_equity)
+                        position = self._open_trade(1, bar, ts, main_open_size)
                     elif bar["short_entry"]:
-                        position = self._open_trade(-1, bar, ts, main_equity)
+                        position = self._open_trade(-1, bar, ts, main_open_size)
 
             # ── 역추세 신규 진입 ──────────────────────────────────────
-            if ct_enabled and ct_position is None and ct_equity > 0:
+            if ct_enabled and ct_position is None:
                 ct_can = (not weekday_only) or is_weekday
                 if ct_can:
                     if bar.get("ct_long_entry", False):
-                        ct_position, ct_per_entry = self._open_ct_trade(1, bar, ts, ct_equity)
+                        ct_position, ct_per_entry = self._open_ct_trade(1, bar, ts, ct_open_base)
                     elif bar.get("ct_short_entry", False):
-                        ct_position, ct_per_entry = self._open_ct_trade(-1, bar, ts, ct_equity)
+                        ct_position, ct_per_entry = self._open_ct_trade(-1, bar, ts, ct_open_base)
 
             # ── 자산 곡선 (메인 + CT 합산) ────────────────────────────
             total_eq = main_equity + ct_equity

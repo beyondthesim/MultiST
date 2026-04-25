@@ -81,10 +81,28 @@ def main():
     print(f"  백테스트 구간: {df[df['in_backtest']].index[0].strftime('%Y-%m-%d')} "
           f"~ {df.index[-1].strftime('%Y-%m-%d')}")
 
+    # ── BTC 매크로 필터 데이터 수집 ──────────────────────────────────
+    df_btc = None
+    btc_cfg = params.get("btc_filter", {})
+    if btc_cfg.get("enabled", False):
+        btc_sym = btc_cfg.get("symbol", "BTC/USDT:USDT")
+        btc_tf  = btc_cfg.get("timeframe", "4h")
+        print(f"\n  BTC 매크로 필터: {btc_sym} {btc_tf}")
+        df_btc = load_ohlcv_with_warmup(
+            symbol       = btc_sym,
+            timeframe    = btc_tf,
+            start_date   = params["start_date"],
+            end_date     = params["end_date"],
+            exchange_id  = params.get("exchange", "okx"),
+            warmup_bars  = 200,
+            force_refresh= args.refresh,
+        )
+        print(f"  BTC 봉 수: {len(df_btc):,}")
+
     # ── 신호 생성 ─────────────────────────────────────────────────────
     from strategy.signal import build_signals
     print("\n[2] 지표 & 신호 계산")
-    df = build_signals(df, params)
+    df = build_signals(df, params, btc_df=df_btc)
 
     # 워밍업 구간 제거 (백테스트 구간만 사용)
     df_bt = df[df["in_backtest"]].copy()

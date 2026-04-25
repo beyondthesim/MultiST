@@ -1,0 +1,2150 @@
+//@version=5
+//@strategy_alert_message {{strategy.order.alert_message}}
+// ************************************** POA ************************************** //
+import PineCoders/Time/4
+import dokang/POA/13 as POA
+
+// 시작시간, 종료시간 설정W
+start_time = input.time(timestamp("2024-01-01T22:05:00+09:00"), title="자동매매 시작")
+end_time = input.time(timestamp("2035-05-19T10:48:00+09:00"), title="자동매매 종료")
+
+backtest = input.bool(true)
+
+var bool afterStartDate = na
+if backtest
+    afterStartDate := (time >= start_time and time < end_time)
+else
+    afterStartDate := (time >= timenow)
+
+// 포아봇 설정
+lever = input(20)
+pstrategy = POA.bot.new("", start_time, end_time, leverage = lever)
+pstrategy.start_trade()
+// ********************************************************************************* //
+
+strategy("(long) 다이버 역추세", overlay=true, pyramiding=9, default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+ initial_capital=5000, commission_type=strategy.commission.percent, commission_value=0.05, process_orders_on_close=false)
+
+// 설정
+leverage = lever // 레버리지 비율 설정
+initialCapital = input.int(5000, step=1)
+feePercent = (0.05 / 100)
+
+reinvest = input.bool(title="수익재투자", defval=true)
+reinvestperc = input.float(title="수익재투자비율", defval=100.0)
+entry_base = input.float(0.7, step=0.1)
+
+var float initialBuyAmount = na
+
+
+
+if reinvest
+    initialBuyAmount := (strategy.initial_capital + strategy.netprofit * reinvestperc / 100) / (100.0/entry_base)
+else
+    initialBuyAmount := initialCapital / (100.0/entry_base)
+
+var float avgPrice = na
+var float totalAmount = 0
+var float totalCost = 0
+var int buyCount = 0
+var float avgSellPrice = na
+var float totalSellAmount = 0
+var float totalSellCost = 0
+var int sellCount = 0
+var int redCandleCount = 0  // 연속 음봉 카운트 변수
+var bool tradeExecuted = false  // 현재 캔들에서 거래가 실행되었는지 여부
+var float sellPnL = 0
+var float finalSellPrice = na
+
+var PriceArray = array.new_float(0, 0)
+var buyAmountArray = array.new_int(0, 0)
+var buyAmountArraystack = array.new_int(0, 0)
+var float finalPrice = 0.0
+
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © LonesomeTheBlue
+
+prd = input.int(defval = 5, title = "Pivot Period", minval = 1, maxval = 50)
+source = input.string(defval = "High/Low", title = "Source for Pivot Points", options = ["Close", "High/Low"])
+searchdiv = input.string(defval = "Regular/Hidden", title = "Divergence Type", options = ["Regular", "Hidden", "Regular/Hidden"])
+showindis = input.string(defval = "Don't Show", title = "Show Indicator Names", options = ["Full", "First Letter", "Don't Show"])
+showlimit = input.int(1, title="Minimum Number of Divergence", minval = 1, maxval = 11)
+maxpp = input.int(defval = 10, title = "Maximum Pivot Points to Check", minval = 1, maxval = 20)
+maxbars = input.int(defval = 100, title = "Maximum Bars to Check", minval = 30, maxval = 200)
+shownum = input(defval = false, title = "Show Divergence Number")
+showlast = input(defval = false, title = "Show Only Last Divergence")
+dontconfirm = input(defval = false, title = "Don't Wait for Confirmation")
+showlines = input(defval = false, title = "Show Divergence Lines")
+showpivot = input(defval = false, title = "Show Pivot Points")
+calcmacd = input(defval = true, title = "MACD")
+calcmacda = input(defval = true, title = "MACD Histogram")
+calcrsi = input(defval = true, title = "RSI")
+calcstoc = input(defval = true, title = "Stochastic")
+calccci = input(defval = true, title = "CCI")
+calcmom = input(defval = true, title = "Momentum")
+calcobv = input(defval = true, title = "OBV")
+calcvwmacd = input(true, title = "VWmacd")
+calccmf = input(true, title = "Chaikin Money Flow")
+calcmfi = input(true, title = "Money Flow Index")
+calcext = input(true, title = "Check External Indicator")
+externalindi = input(defval = close, title = "External Indicator")
+pos_reg_div_col = input(defval = color.yellow, title = "Positive Regular Divergence")
+neg_reg_div_col = input(defval = color.navy, title = "Negative Regular Divergence")
+pos_hid_div_col = input(defval = color.lime, title = "Positive Hidden Divergence")
+neg_hid_div_col = input(defval = color.red, title = "Negative Hidden Divergence")
+pos_div_text_col = input(defval = color.black, title = "Positive Divergence Text Color")
+neg_div_text_col = input(defval = color.white, title = "Negative Divergence Text Color")
+reg_div_l_style_ = input.string(defval = "Solid", title = "Regular Divergence Line Style", options = ["Solid", "Dashed", "Dotted"])
+hid_div_l_style_ = input.string(defval = "Dashed", title = "Hdden Divergence Line Style", options = ["Solid", "Dashed", "Dotted"])
+reg_div_l_width = input.int(defval = 2, title = "Regular Divergence Line Width", minval = 1, maxval = 5)
+hid_div_l_width = input.int(defval = 1, title = "Hidden Divergence Line Width", minval = 1, maxval = 5)
+showmas = input(defval = false, title = "Show MAs 50 & 200", inline = "ma12")
+cma1col = input(defval = color.lime, title = "", inline = "ma12")
+cma2col = input(defval = color.red, title = "", inline = "ma12")
+
+plot(showmas ? ta.sma(close, 50) : na, color = showmas ? cma1col : na)
+plot(showmas ? ta.sma(close, 200) : na, color = showmas ? cma2col: na)
+
+// set line styles
+var reg_div_l_style = reg_div_l_style_ == "Solid" ? line.style_solid : 
+                       reg_div_l_style_ == "Dashed" ? line.style_dashed :
+                       line.style_dotted
+var hid_div_l_style = hid_div_l_style_ == "Solid" ? line.style_solid : 
+                       hid_div_l_style_ == "Dashed" ? line.style_dashed :
+                       line.style_dotted
+
+
+// get indicators
+rsi = ta.rsi(close, 14) // RSI
+[macd, signal, deltamacd] = ta.macd(close, 12, 26, 9) // MACD
+moment = ta.mom(close, 10) // Momentum
+cci = ta.cci(close, 10) // CCI
+Obv = ta.obv // OBV
+stk = ta.sma(ta.stoch(close, high, low, 14), 3) // Stoch
+maFast = ta.vwma(close, 12)
+maSlow = ta.vwma(close, 26)
+vwmacd = maFast - maSlow // Volume Weighted MACD
+Cmfm = ((close - low) - (high - close)) / (high - low)
+Cmfv = Cmfm * volume
+cmf = ta.sma(Cmfv, 21) / ta.sma(volume, 21) // Chaikin Money Flow
+Mfi = ta.mfi(hlc3, 14) // Money Flow Index
+
+// keep indicators names and colors in arrays
+var indicators_name = array.new_string(11)
+var div_colors = array.new_color(4)
+if barstate.isfirst
+    // names
+    array.set(indicators_name, 0, showindis == "Full" ? "MACD" : "M")
+    array.set(indicators_name, 1, showindis == "Full" ? "Hist" : "H")
+    array.set(indicators_name, 2, showindis == "Full" ? "RSI" : "E")
+    array.set(indicators_name, 3, showindis == "Full" ? "Stoch" : "S")
+    array.set(indicators_name, 4, showindis == "Full" ? "CCI" : "C")
+    array.set(indicators_name, 5, showindis == "Full" ? "MOM" : "M")
+    array.set(indicators_name, 6, showindis == "Full" ? "OBV" : "O")
+    array.set(indicators_name, 7, showindis == "Full" ? "VWMACD" : "V")
+    array.set(indicators_name, 8, showindis == "Full" ? "CMF" : "C")
+    array.set(indicators_name, 9, showindis == "Full" ? "MFI" : "M")
+    array.set(indicators_name,10, showindis == "Full" ? "Extrn" : "X")
+    //colors
+    array.set(div_colors, 0, pos_reg_div_col)
+    array.set(div_colors, 1, neg_reg_div_col)
+    array.set(div_colors, 2, pos_hid_div_col)
+    array.set(div_colors, 3, neg_hid_div_col)
+
+// Check if we get new Pivot High Or Pivot Low
+float ph = ta.pivothigh((source == "Close" ? close : high), prd, prd)
+float pl = ta.pivotlow((source == "Close" ? close : low), prd, prd)
+
+plotshape(ph and showpivot, text = "H", style = shape.labeldown, color = color.new(color.white, 100), textcolor = color.red, location = location.abovebar, offset = -prd)
+plotshape(pl and showpivot, text = "L", style = shape.labelup, color = color.new(color.white, 100), textcolor = color.lime, location = location.belowbar, offset = -prd)
+
+// keep values and positions of Pivot Highs/Lows in the arrays
+var int maxarraysize = 20
+var ph_positions = array.new_int(maxarraysize, 0)
+var pl_positions = array.new_int(maxarraysize, 0)
+var ph_vals = array.new_float(maxarraysize, 0.)
+var pl_vals = array.new_float(maxarraysize, 0.)
+
+// add PHs to the array
+if ph
+    array.unshift(ph_positions, bar_index)
+    array.unshift(ph_vals, ph)
+    if array.size(ph_positions) > maxarraysize
+        array.pop(ph_positions)
+        array.pop(ph_vals)
+
+// add PLs to the array
+if pl
+    array.unshift(pl_positions, bar_index)
+    array.unshift(pl_vals, pl)
+    if array.size(pl_positions) > maxarraysize
+        array.pop(pl_positions)
+        array.pop(pl_vals)
+
+// functions to check Regular Divergences and Hidden Divergences
+
+// function to check positive regular or negative hidden divergence
+// cond == 1 => positive_regular, cond == 2=> negative_hidden
+positive_regular_positive_hidden_divergence(src, cond)=>
+    divlen = 0
+    prsc = source == "Close" ? close : low
+    // if indicators higher than last value and close price is higher than las close 
+    if dontconfirm or src > src[1] or close > close[1]
+        startpoint = dontconfirm ? 0 : 1 // don't check last candle
+        // we search last 15 PPs
+        for x = 0 to maxpp - 1
+            len = bar_index - array.get(pl_positions, x) + prd
+            // if we reach non valued array element or arrived 101. or previous bars then we don't search more
+            if array.get(pl_positions, x) == 0 or len > maxbars
+                break
+            if len > 5 and 
+               ((cond == 1 and src[startpoint] > src[len] and prsc[startpoint] < nz(array.get(pl_vals, x))) or
+               (cond == 2 and src[startpoint] < src[len] and prsc[startpoint] > nz(array.get(pl_vals, x))))
+                slope1 = (src[startpoint] - src[len]) / (len - startpoint)
+                virtual_line1 = src[startpoint] - slope1
+                slope2 = (close[startpoint] - close[len]) / (len - startpoint)
+                virtual_line2 = close[startpoint] - slope2
+                arrived = true
+                for y = 1 + startpoint to len - 1
+                    if src[y] < virtual_line1 or nz(close[y]) < virtual_line2
+                        arrived := false
+                        break
+                    virtual_line1 := virtual_line1 - slope1
+                    virtual_line2 := virtual_line2 - slope2
+                
+                if arrived
+                    divlen := len
+                    break
+    divlen
+
+// function to check negative regular or positive hidden divergence
+// cond == 1 => negative_regular, cond == 2=> positive_hidden
+negative_regular_negative_hidden_divergence(src, cond)=>
+    divlen = 0
+    prsc = source == "Close" ? close : high
+    // if indicators higher than last value and close price is higher than las close 
+    if dontconfirm or src < src[1] or close < close[1]
+        startpoint = dontconfirm ? 0 : 1 // don't check last candle
+        // we search last 15 PPs
+        for x = 0 to maxpp - 1
+            len = bar_index - array.get(ph_positions, x) + prd
+            // if we reach non valued array element or arrived 101. or previous bars then we don't search more
+            if array.get(ph_positions, x) == 0 or len > maxbars
+                break
+            if len > 5 and 
+               ((cond == 1 and src[startpoint] < src[len] and prsc[startpoint] > nz(array.get(ph_vals, x))) or 
+               (cond == 2 and src[startpoint] > src[len] and prsc[startpoint] < nz(array.get(ph_vals, x))))
+                slope1 = (src[startpoint] - src[len]) / (len - startpoint)
+                virtual_line1 = src[startpoint] - slope1
+                slope2 = (close[startpoint] - nz(close[len])) / (len - startpoint)
+                virtual_line2 = close[startpoint] - slope2
+                arrived = true
+                for y = 1 + startpoint to len - 1
+                    if src[y] > virtual_line1 or nz(close[y]) > virtual_line2
+                        arrived := false
+                        break
+                    virtual_line1 := virtual_line1 - slope1
+                    virtual_line2 := virtual_line2 - slope2
+                
+                if arrived
+                    divlen := len
+                    break
+    divlen
+
+// calculate 4 types of divergence if enabled in the options and return divergences in an array
+calculate_divs(cond, indicator)=>
+    divs = array.new_int(4, 0)
+    array.set(divs, 0, cond and (searchdiv == "Regular" or searchdiv == "Regular/Hidden") ? positive_regular_positive_hidden_divergence(indicator, 1) : 0)
+    array.set(divs, 1, cond and (searchdiv == "Regular" or searchdiv == "Regular/Hidden") ? negative_regular_negative_hidden_divergence(indicator, 1) : 0)
+    array.set(divs, 2, cond and (searchdiv == "Hidden" or searchdiv == "Regular/Hidden")  ? positive_regular_positive_hidden_divergence(indicator, 2) : 0)
+    array.set(divs, 3, cond and (searchdiv == "Hidden" or searchdiv == "Regular/Hidden")  ? negative_regular_negative_hidden_divergence(indicator, 2) : 0)
+    divs
+
+// array to keep all divergences
+var all_divergences = array.new_int(44) // 11 indicators * 4 divergence = 44 elements
+// set related array elements
+array_set_divs(div_pointer, index)=>
+    for x = 0 to 3
+        array.set(all_divergences, index * 4 + x, array.get(div_pointer, x))
+
+// set divergences array 
+array_set_divs(calculate_divs(calcmacd, macd), 0)
+array_set_divs(calculate_divs(calcmacda, deltamacd), 1)
+array_set_divs(calculate_divs(calcrsi, rsi), 2)
+array_set_divs(calculate_divs(calcstoc, stk), 3)
+array_set_divs(calculate_divs(calccci, cci), 4)
+array_set_divs(calculate_divs(calcmom, moment), 5)
+array_set_divs(calculate_divs(calcobv, Obv), 6)
+array_set_divs(calculate_divs(calcvwmacd, vwmacd), 7)
+array_set_divs(calculate_divs(calccmf, cmf), 8)
+array_set_divs(calculate_divs(calcmfi, Mfi), 9)
+array_set_divs(calculate_divs(calcext, externalindi), 10)
+
+// check minimum number of divergence, if less than showlimit then delete all divergence
+
+// 초기 변수 설정
+var int total_div = 0
+
+// 모든 다이버전스 합계 계산
+for x = 0 to array.size(all_divergences) - 1
+    total_div += math.round(math.sign(array.get(all_divergences, x)))
+
+// 다이버전스 합계가 showlimit보다 적으면 모든 다이버전스 삭제
+if total_div < showlimit
+    array.fill(all_divergences, 0)
+
+// keep line in an array
+var pos_div_lines = array.new_line(0)
+var neg_div_lines = array.new_line(0)
+var pos_div_labels = array.new_label(0)
+var neg_div_labels = array.new_label(0) 
+
+// remove old lines and labels if showlast option is enabled
+delete_old_pos_div_lines()=>
+    if array.size(pos_div_lines) > 0    
+        for j = 0 to array.size(pos_div_lines) - 1 
+            line.delete(array.get(pos_div_lines, j))
+        array.clear(pos_div_lines)
+
+delete_old_neg_div_lines()=>
+    if array.size(neg_div_lines) > 0    
+        for j = 0 to array.size(neg_div_lines) - 1 
+            line.delete(array.get(neg_div_lines, j))
+        array.clear(neg_div_lines)
+
+delete_old_pos_div_labels()=>
+    if array.size(pos_div_labels) > 0 
+        for j = 0 to array.size(pos_div_labels) - 1 
+            label.delete(array.get(pos_div_labels, j))
+        array.clear(pos_div_labels)
+
+delete_old_neg_div_labels()=>
+    if array.size(neg_div_labels) > 0    
+        for j = 0 to array.size(neg_div_labels) - 1 
+            label.delete(array.get(neg_div_labels, j))
+        array.clear(neg_div_labels)
+
+// delete last creted lines and labels until we met new PH/PV 
+delete_last_pos_div_lines_label(n)=>
+    if n > 0 and array.size(pos_div_lines) >= n    
+        asz = array.size(pos_div_lines)
+        for j = 1 to n
+            line.delete(array.get(pos_div_lines, asz - j))
+            array.pop(pos_div_lines)
+        if array.size(pos_div_labels) > 0  
+            label.delete(array.get(pos_div_labels, array.size(pos_div_labels) - 1))
+            array.pop(pos_div_labels)
+
+delete_last_neg_div_lines_label(n)=>
+    if n > 0 and array.size(neg_div_lines) >= n    
+        asz = array.size(neg_div_lines)
+        for j = 1 to n
+            line.delete(array.get(neg_div_lines, asz - j))
+            array.pop(neg_div_lines)
+        if array.size(neg_div_labels) > 0  
+            label.delete(array.get(neg_div_labels, array.size(neg_div_labels) - 1))
+            array.pop(neg_div_labels)
+            
+// variables for Alerts
+pos_reg_div_detected = false
+neg_reg_div_detected = false
+pos_hid_div_detected = false
+neg_hid_div_detected = false
+
+// to remove lines/labels until we met new // PH/PL
+var last_pos_div_lines = 0
+var last_neg_div_lines = 0
+var remove_last_pos_divs = false 
+var remove_last_neg_divs = false
+if pl
+    remove_last_pos_divs := false
+    last_pos_div_lines := 0
+if ph
+    remove_last_neg_divs := false
+    last_neg_div_lines := 0
+
+// draw divergences lines and labels
+divergence_text_top = ""
+divergence_text_bottom = ""
+distances = array.new_int(0)
+dnumdiv_top = 0
+dnumdiv_bottom = 0
+top_label_col = color.white
+bottom_label_col = color.white
+old_pos_divs_can_be_removed = true
+old_neg_divs_can_be_removed = true
+startpoint = dontconfirm ? 0 : 1 // used for don't confirm option
+
+for x = 0 to 10
+    div_type = -1
+    for y = 0 to 3
+        if array.get(all_divergences, x * 4 + y) > 0 // any divergence?
+            div_type := y
+            if (y % 2) == 1 
+                dnumdiv_top := dnumdiv_top + 1
+                top_label_col := array.get(div_colors, y)
+            if (y % 2) == 0
+                dnumdiv_bottom := dnumdiv_bottom + 1
+                bottom_label_col := array.get(div_colors, y)
+            if not array.includes(distances, array.get(all_divergences, x * 4 + y))  // line not exist ?
+                array.push(distances, array.get(all_divergences, x * 4 + y))
+                new_line = showlines ? line.new(x1 = bar_index - array.get(all_divergences, x * 4 + y), 
+                          y1 = (source == "Close" ? close[array.get(all_divergences, x * 4 + y)] : 
+                                           (y % 2) == 0 ? low[array.get(all_divergences, x * 4 + y)] : 
+                                                          high[array.get(all_divergences, x * 4 + y)]),
+                          x2 = bar_index - startpoint,
+                          y2 = (source == "Close" ? close[startpoint] : 
+                                           (y % 2) == 0 ? low[startpoint] : 
+                                                          high[startpoint]),
+                          color = array.get(div_colors, y),
+                          style = y < 2 ? reg_div_l_style : hid_div_l_style,
+                          width = y < 2 ? reg_div_l_width : hid_div_l_width
+                          )
+                          : na
+                if (y % 2) == 0
+                    if old_pos_divs_can_be_removed
+                        old_pos_divs_can_be_removed := false
+                        if not showlast and remove_last_pos_divs
+                            delete_last_pos_div_lines_label(last_pos_div_lines)
+                            last_pos_div_lines := 0
+                        if showlast
+                            delete_old_pos_div_lines()
+                    array.push(pos_div_lines, new_line)
+                    last_pos_div_lines := last_pos_div_lines + 1
+                    remove_last_pos_divs := true
+                    
+                if (y % 2) == 1
+                    if old_neg_divs_can_be_removed
+                        old_neg_divs_can_be_removed := false
+                        if not showlast and remove_last_neg_divs
+                            delete_last_neg_div_lines_label(last_neg_div_lines)
+                            last_neg_div_lines := 0
+                        if showlast
+                            delete_old_neg_div_lines()
+                    array.push(neg_div_lines, new_line)
+                    last_neg_div_lines := last_neg_div_lines + 1
+                    remove_last_neg_divs := true
+                    
+            // set variables for alerts
+            if y == 0
+                pos_reg_div_detected := true
+            if y == 1
+                neg_reg_div_detected := true
+            if y == 2
+                pos_hid_div_detected := true
+            if y == 3
+                neg_hid_div_detected := true
+    // get text for labels
+    if div_type >= 0
+        divergence_text_top    := divergence_text_top    + ((div_type % 2) == 1 ? (showindis != "Don't Show" ? array.get(indicators_name, x) + "\n" : "") : "")
+        divergence_text_bottom := divergence_text_bottom + ((div_type % 2) == 0 ? (showindis != "Don't Show" ? array.get(indicators_name, x) + "\n" : "") : "")
+
+// 조건에 따른 레이블 생성
+if showindis != "Don't Show" or shownum
+    if shownum and dnumdiv_top > 0
+        divergence_text_top := divergence_text_top + str.tostring(dnumdiv_top)
+    if shownum and dnumdiv_bottom > 0
+        divergence_text_bottom := divergence_text_bottom + str.tostring(dnumdiv_bottom)
+    
+    if divergence_text_top != ""
+        if showlast
+            delete_old_neg_div_labels()
+        array.push(neg_div_labels, 
+                      label.new( x = bar_index, 
+                                 y = math.max(high, high[1]), 
+                                 text = divergence_text_top,
+                                 color = top_label_col,
+                                 textcolor = neg_div_text_col,
+                                 style = label.style_label_down
+                                 ))
+                                 
+    if divergence_text_bottom != ""
+        if showlast
+            delete_old_pos_div_labels()
+        array.push(pos_div_labels, 
+                      label.new( x = bar_index, 
+                                 y = math.min(low, low[1]), 
+                                 text = divergence_text_bottom,
+                                 color = bottom_label_col, 
+                                 textcolor = pos_div_text_col,
+                                 style = label.style_label_up
+                                 ))
+
+entry_type = input.string("Safe9", '진입방식', options=["피보나치", "Safe9", "마틴게일"])
+
+if array.size(buyAmountArray) == 0 and entry_type == "피보나치"
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 2)
+    array.push(buyAmountArray, 3)
+    array.push(buyAmountArray, 5)
+    array.push(buyAmountArray, 8)
+    array.push(buyAmountArray, 13)
+    array.push(buyAmountArray, 21)
+    array.push(buyAmountArray, 34)
+    array.push(buyAmountArraystack, 1)
+    array.push(buyAmountArraystack, 2)
+    array.push(buyAmountArraystack, 4)
+    array.push(buyAmountArraystack, 7)
+    array.push(buyAmountArraystack, 12)
+    array.push(buyAmountArraystack, 20)
+    array.push(buyAmountArraystack, 33)
+    array.push(buyAmountArraystack, 54)
+    array.push(buyAmountArraystack, 88)
+
+if array.size(buyAmountArray) == 0 and entry_type == "Safe9"
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 2)
+    array.push(buyAmountArray, 3)
+    array.push(buyAmountArray, 5)
+    array.push(buyAmountArray, 8)
+    array.push(buyAmountArray, 13)
+    array.push(buyAmountArray, 21)
+    array.push(buyAmountArraystack, 1)
+    array.push(buyAmountArraystack, 2)
+    array.push(buyAmountArraystack, 3)
+    array.push(buyAmountArraystack, 4)
+    array.push(buyAmountArraystack, 6)
+    array.push(buyAmountArraystack, 9)
+    array.push(buyAmountArraystack, 14)
+    array.push(buyAmountArraystack, 22)
+    array.push(buyAmountArraystack, 35)
+    array.push(buyAmountArraystack, 56)
+
+if array.size(buyAmountArray) == 0 and entry_type == "마틴게일"
+    //array.push(buyAmountArray, 1)
+    //array.push(buyAmountArray, 2)
+    //array.push(buyAmountArray, 4)
+    //array.push(buyAmountArray, 8)
+    //array.push(buyAmountArray, 16)
+    //array.push(buyAmountArray, 32)
+    //array.push(buyAmountArray, 64)
+    //array.push(buyAmountArraystack, 1)
+    //array.push(buyAmountArraystack, 3)
+    //array.push(buyAmountArraystack, 7)
+    //array.push(buyAmountArraystack, 15)
+    //array.push(buyAmountArraystack, 31)
+    //array.push(buyAmountArraystack, 63)
+    //array.push(buyAmountArraystack, 127)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 3)
+    array.push(buyAmountArray, 5)
+    array.push(buyAmountArray, 10)
+    array.push(buyAmountArray, 20)
+    array.push(buyAmountArray, 32)
+    array.push(buyAmountArray, 64)
+    array.push(buyAmountArraystack, 1)
+    array.push(buyAmountArraystack, 4)
+    array.push(buyAmountArraystack, 9)
+    array.push(buyAmountArraystack, 19)
+    array.push(buyAmountArraystack, 39)
+    array.push(buyAmountArraystack, 63)
+    array.push(buyAmountArraystack, 127)
+// 캔들 조건
+RedCandleN = input.float(0.05, step=0.1)
+isRedCandle = close < open
+largeRedCandle = (open - close) / open >= RedCandleN/100
+
+// 0.35% 이상의 음봉이 연속으로 몇 개 나왔는지 체크
+if largeRedCandle
+    redCandleCount := redCandleCount + 1
+else
+    redCandleCount := 0
+
+ticker_symbol = array.get(str.split(syminfo.ticker, "USDT")[0], 0)
+
+timestamp_now = str.format_time(timenow)
+
+
+market = input.string("bybit", 'market', options=["binance", "okx", "bybit"])
+
+var string longentry = na
+var string shortentry = na
+var string longexit = na
+var string shortexit = na
+
+if market == "binance"
+    longentry := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":'
+    shortentry := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":'
+    longexit := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":'
+    shortexit := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":'
+
+if market == "okx"
+
+    longentry := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":'
+    shortentry := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":'
+    longexit := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":'
+    shortexit := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":'
+
+if market == "bybit"
+
+    longentry := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":'
+    shortentry := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":'
+    longexit := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":'
+    shortexit := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":'
+
+var bool ema_check = na
+
+ema_check_enable = input.bool(defval = true)
+ema_line = input.int(defval = 30)
+
+if ema_check_enable
+    ema_check := close <= ta.ema(close, ema_line)
+else
+    ema_check := true
+
+c1 = 4
+c2 = 13
+c3 = 50
+c4 = 60
+c5 = 3
+
+var bool enhanced_ema_check = na
+
+enhanced_ema_check_enable = input.bool(defval = true)
+
+if enhanced_ema_check_enable
+    if close > ta.ema(close, c1) and ta.ema(close, c1) > ta.ema(close, c2) and ta.ema(close, c2) > ta.ema(close, c3) and ta.ema(close, c3) > ta.ema(close, c4)
+        enhanced_ema_check := true
+    if close < ta.ema(close, c5)
+        enhanced_ema_check := false
+else
+    enhanced_ema_check := true
+
+if buyCount == 0 and not tradeExecuted and afterStartDate and redCandleCount >= 4 and ema_check //and ta.sma(close, 50) > ta.sma(close, 200)
+    buyCount := 1
+    totalAmount := initialBuyAmount 
+    totalCost := initialBuyAmount * close * (1 + feePercent)  // 수수료 포함
+    avgPrice := totalCost / totalAmount
+    pstrategy.entry("Buy 1", "strategy.long", qty=initialBuyAmount / close)  // 매수 금액을 계약 수로 변환
+    alert(longentry + str.tostring(entry_base*array.get(buyAmountArray, buyCount-1)) + ',"equity":"y","leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.push(PriceArray, close)
+    redCandleCount := 0  // 매수 후 카운트 초기화
+    tradeExecuted := true
+
+if array.size(PriceArray) > 0
+    finalPrice := array.get(PriceArray, array.size(PriceArray)-1)
+
+loss_close = input.int(9, step=1)
+loss_perc = input.float(0.5, step=0.01)
+
+safe_close = input.int(4, step=1)
+safe_close_perc = input.float(1.02, step=0.001)
+
+// 추가 매수 조건: 평단가보다 낮을 때 0.5% 이상의 음봉이 나오면 추가 매수
+SecondN = input.float(0.013, step=0.1)
+Mod_SecondN_Val = input.float(2.5, step=0.1)
+var float Mod_SecondN = na
+//if buyCount < safe_close
+//    Mod_SecondN := SecondN
+//else
+//    Mod_SecondN := SecondN * Mod_SecondN_Val
+if enhanced_ema_check
+    Mod_SecondN := SecondN
+else
+    Mod_SecondN := SecondN * Mod_SecondN_Val
+if buyCount > 0 and buyCount < loss_close and not tradeExecuted and afterStartDate and dnumdiv_bottom > 0 and close < finalPrice and close < (finalPrice * (1 - Mod_SecondN))// and enhanced_ema_check
+    buyCount := buyCount + 1
+    float buyAmount = initialBuyAmount * array.get(buyAmountArray, buyCount-1)
+    totalAmount := totalAmount + buyAmount
+    totalCost := totalCost + buyAmount * close * (1 + feePercent)  // 수수료 포함
+    avgPrice := totalCost / totalAmount
+    pstrategy.entry("Buy " + str.tostring(buyCount), "strategy.long", qty=buyAmount / close)  // 매수 금액을 계약 수로 변환
+    alert(longentry + str.tostring(entry_base*array.get(buyAmountArray, buyCount-1)) + ',"equity":"y","leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.push(PriceArray, close)
+    tradeExecuted := true
+
+SellPerc = input.float(0.01, step=0.001)
+
+if false// buyCount == 6 and sellCount == 0 and not tradeExecuted and afterStartDate and close < finalPrice * 0.95 and ta.ema(close, 50) < ta.ema(close, 100) and (na(finalSellPrice) or finalSellPrice > close * 1.05) and dnumdiv_top > 0
+    sellCount := 1
+    float sellAmount = initialBuyAmount * 20
+    totalSellCost := sellAmount * close * (1 + feePercent)  // 수수료 포함
+    avgSellPrice := totalSellCost / sellAmount
+    pstrategy.entry("Sell hedge", "strategy.long", qty=sellAmount / close)  // 매수 금액을 계약 수로 변환
+    alert(shortentry + str.tostring(20*entry_base) + ',"equity":"y","leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    finalSellPrice := close
+    tradeExecuted := true
+
+if false //buyCount == 6 and sellCount == 1 and not tradeExecuted and afterStartDate and ta.ema(close, 50) > ta.ema(close, 100) and close > avgSellPrice
+    sellPnL := sellPnL - (close - avgSellPrice)/close * (totalSellCost/(avgSellPrice*1.0005))
+    pstrategy.close("Sell hedge")
+    alert(shortexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    sellCount := 0
+    avgSellPrice := na
+    totalSellCost := na
+    tradeExecuted := true
+
+if false //buyCount == 6 and sellCount == 1 and not tradeExecuted and afterStartDate and close > avgSellPrice * (1+SellPerc) and ta.ema(close, 50) > ta.ema(close, 100)
+    sellPnL := sellPnL - (close - avgSellPrice)/close * (totalSellCost/(avgSellPrice*1.0005))
+    pstrategy.close("Sell hedge")
+    alert(shortexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    sellCount := 0
+    avgSellPrice := na
+    totalSellCost := na
+    tradeExecuted := true
+
+if false //sellCount == 1 and not tradeExecuted and afterStartDate and (20 * (avgPrice * (1 + feePercent) - close)) < (30 * (avgSellPrice * (1 - feePercent) - close))
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))  // 1차 매수분을 제외한 모든 포지션 매도
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := na
+    avgPrice := na
+    buyCount := 0
+    sellPnL := sellPnL + (close - avgSellPrice)/close * (totalSellCost/(avgSellPrice*1.0005))
+    pstrategy.close("Sell hedge")
+    alert(shortexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    sellCount := 0
+    avgSellPrice := na
+    totalSellCost := na
+    finalSellPrice := na
+    tradeExecuted := true
+
+
+all_close = input.float(1.04, step=0.001)
+// 평단가보다 수수료를 더한 가격에 도달 시 모든 포지션 정리
+if buyCount > 1 and close >= avgPrice * (all_close + feePercent) and not tradeExecuted
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))
+        if array.size(PriceArray) > 0
+            array.pop(PriceArray)
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    buyCount := 0
+    finalSellPrice := na
+    tradeExecuted := true
+
+
+
+if buyCount >= loss_close and close <= finalPrice * (loss_perc - feePercent) and not tradeExecuted
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))
+        if array.size(PriceArray) > 0
+            array.pop(PriceArray)
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    buyCount := 0
+    finalSellPrice := na
+    tradeExecuted := true
+
+if buyCount >= safe_close and close >= avgPrice * (safe_close_perc + feePercent) and not tradeExecuted
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))
+        if array.size(PriceArray) > 0
+            array.pop(PriceArray)
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    buyCount := 0
+    finalSellPrice := na
+    tradeExecuted := true
+    
+if array.size(PriceArray) > 0
+    finalPrice := array.get(PriceArray, array.size(PriceArray)-1)
+
+cycle = input.bool(title="순환매", defval=false)
+
+// 순환매
+cycle_close = input.float(1.007, step=0.001)
+//if buyCount > 0 and sellCount == 0 and not tradeExecuted and afterStartDate and array.size(PriceArray) > 0 and close >= finalPrice * (cycle_close + feePercent) and dnumdiv_top > 0 and cycle and close >= avgPrice
+if buyCount > loss_close-1 and not tradeExecuted and afterStartDate and close >= avgPrice * (cycle_close + feePercent) and cycle
+    pstrategy.close("Buy " + str.tostring(buyCount))
+    alert(longexit + str.tostring(50) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.pop(PriceArray)
+    float buyAmount = initialBuyAmount * array.get(buyAmountArray, buyCount-1)
+    totalAmount := totalAmount - buyAmount
+    totalCost := totalCost - (buyAmount * finalPrice * (1 + feePercent))
+    avgPrice := totalCost / totalAmount
+    buyCount := buyCount - 1
+    tradeExecuted := true
+
+// 익절 조건 (1차 매수 포지션의 10% 수익)
+TPN = input.float(40, step=0.1)
+takeProfitLevel = avgPrice * (1 + feePercent) * (1 + TPN/100 / leverage)
+
+if buyCount == 1 and not tradeExecuted and afterStartDate and dnumdiv_top > 0 and close >= takeProfitLevel and dnumdiv_top > 0
+    pstrategy.close("Buy 1")
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.pop(PriceArray)
+    buyCount := 0
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    finalSellPrice := na
+
+hf = ta.highest(high, 24)
+lf = ta.lowest(low, 24)
+center = ta.ema(close,24) // (hf + lf) / 2
+
+if strategy.position_size == 0
+    pstrategy.exit('▽', '"Buy " + str.tostring(buyCount)', limit=center)
+    pstrategy.exit('▽', '"Buy " + str.tostring(i)', limit=center)
+
+// 캔들이 끝날 때 tradeExecuted 변수를 초기화
+if (bar_index > 0 and bar_index[1] != bar_index)
+    tradeExecuted := false
+
+//Table
+
+PnL     = strategy.grossprofit - strategy.grossloss
+ex_PnL  = math.round(strategy.openprofit, 1)
+SellPnL  = math.round(sellPnL, 1)
+
+totalbalance  = strategy.initial_capital + strategy.netprofit
+
+used_equity   = math.round(strategy.position_avg_price * strategy.position_size)
+ratio_equity  = strategy.position_size > 0 ? math.round(used_equity / totalbalance * 100, 1) : 0
+
+mdd     = strategy.opentrades.max_drawdown(strategy.opentrades - 1)
+
+totalTrades   = strategy.closedtrades
+winningTrades = na(totalTrades) ? na : totalTrades - strategy.losstrades
+
+winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0
+
+profitFactor  = math.abs(strategy.grossprofit) > 0 ? strategy.grossprofit / math.abs(strategy.grossloss) : na
+
+avgBarsPerTrade() =>
+    sumBarsPerTrade = 0
+    for tradeNo = 0 to strategy.closedtrades - 1
+        // Loop through all closed trades, starting with the oldest.
+        sumBarsPerTrade += strategy.closedtrades.exit_bar_index(tradeNo) - strategy.closedtrades.entry_bar_index(tradeNo) + 1
+    result = nz(sumBarsPerTrade / strategy.closedtrades)
+
+//TABLE ----------------------------------------------------------------------------------------------------------------
+show_status           = input.bool(true,'', group='Status Table', inline='t1')
+status_text_size      = input.string(size.tiny, 'Size ', options=[size.tiny, size.small, size.normal], group='Status Table', inline='t1')
+status_table_position = input.string(position.bottom_left, 'Position ', options=[position.bottom_left, position.bottom_right, position.bottom_center, position.top_left, position.top_right, position.top_center], group='Status Table', inline='t1')
+
+show_performance           = input.bool(true, '', group='Profit Table', inline='t2')
+performance_text_size      = input.string(size.small, 'Size ', options=[size.tiny, size.small, size.normal], group='Profit Table', inline='t2')
+performance_table_position = input.string(position.bottom_right, 'Position ', options=[position.bottom_left, position.bottom_right, position.bottom_center, position.top_left, position.top_right, position.top_center], group='Profit Table', inline='t2')
+
+// ------------------------------------------------------------------------------------------------------------------ //
+
+profit_color1 = PnL > 0 ? color.lime : color.red
+profit_color2 = strategy.openprofit < 0 ? color.red : color.lime
+
+var Table = table.new(status_table_position, columns=10, rows=20, border_width=1, bgcolor=color.black, border_color=color.gray)
+
+if show_status
+    //table.cell(table_id=Table, column=0, row=0, text='Position Size', text_size=status_text_size, text_color=color.gray)
+    //table.cell(table_id=Table, column=0, row=1, text=str.tostring(strategy.position_size), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=0, row=0, text='Sell PnL', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=0, row=1, text=str.tostring(SellPnL), text_size=status_text_size, text_color=color.red)
+    table.cell(table_id=Table, column=0, row=2, text='Avg Price', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=0, row=3, text=str.tostring(math.round_to_mintick(strategy.position_avg_price)), text_size=status_text_size, text_color=color.green)
+
+    table.cell(table_id=Table, column=1, row=0, text='Unrealized PnL', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=1, row=1, text=str.tostring(math.round(strategy.openprofit, 1)) + ' ' + syminfo.currency, text_size=status_text_size, text_color=profit_color2)
+    table.cell(table_id=Table, column=1, row=2, text_color=color.gray, text_size=status_text_size, text='Net profit')
+    table.cell(table_id=Table, column=1, row=3, text=str.tostring(math.round(PnL, 1)) + ' ' + syminfo.currency, text_size=status_text_size, text_color=profit_color1)    
+
+    table.cell(table_id=Table, column=2, row=0, text='Win Rate', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=2, row=1, text=str.tostring(math.round(winRate, 1)), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=2, row=2, text='Profit Factor', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=2, row=3, text=str.tostring(math.round(profitFactor, 2)), text_size=status_text_size, text_color=color.olive)
+
+    table.cell(table_id=Table, column=4, row=0, text='Max Drawdown', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=4, row=1, text=str.tostring(math.round(mdd, 1)), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=4, row=2, text='Bars Per Trade', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=4, row=3, text=str.tostring(int(avgBarsPerTrade())), text_size=status_text_size, text_color=color.olive)
+
+if show_performance
+    new_month = month(time) != month(time[1])
+    new_year  = year(time)  != year(time[1])
+    
+    eq = strategy.initial_capital + strategy.netprofit
+    
+    bar_pnl = eq / eq[1] - 1
+    
+    cur_month_pnl = 0.0
+    cur_year_pnl  = 0.0
+    
+    // Current Monthly P&L
+    cur_month_pnl := new_month ? 0.0 : 
+                     (1 + cur_month_pnl[1]) * (1 + bar_pnl) - 1 
+    
+    // Current Yearly P&L
+    cur_year_pnl := new_year ? 0.0 : 
+                     (1 + cur_year_pnl[1]) * (1 + bar_pnl) - 1  
+    
+    // Arrays to store Yearly and Monthly P&Ls
+    var month_pnl  = array.new_float(0)
+    var month_time = array.new_int(0)
+    
+    var year_pnl  = array.new_float(0)
+    var year_time = array.new_int(0)
+    
+    last_computed = false
+    
+    if (not na(cur_month_pnl[1]) and (new_month or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(month_pnl)
+            array.pop(month_time)
+            
+        array.push(month_pnl , cur_month_pnl[1])
+        array.push(month_time, time[1])
+    
+    if (not na(cur_year_pnl[1]) and (new_year or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(year_pnl)
+            array.pop(year_time)
+            
+        array.push(year_pnl , cur_year_pnl[1])
+        array.push(year_time, time[1])
+    
+    last_computed := barstate.islastconfirmedhistory ? true : nz(last_computed[1])
+    
+    // Monthly P&L Table    
+    var monthly_table = table(na)
+    
+    if (barstate.islastconfirmedhistory)
+        monthly_table := table.new(performance_table_position, columns = 14, rows = array.size(year_pnl) + 1, border_width = 1)
+    
+        table.cell(monthly_table, 0,  0, "", text_size=performance_text_size,     bgcolor = color.gray)
+        table.cell(monthly_table, 1,  0, "Jan", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 2,  0, "Feb", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 3,  0, "Mar", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 4,  0, "Apr", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 5,  0, "May", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 6,  0, "Jun", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 7,  0, "Jul", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 8,  0, "Aug", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 9,  0, "Sep", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 10, 0, "Oct", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 11, 0, "Nov", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 12, 0, "Dec", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 13, 0, "Year", text_size=performance_text_size, bgcolor = color.gray)
+    
+    
+        for yi = 0 to array.size(year_pnl) - 1
+            table.cell(monthly_table, 0,  yi + 1, str.tostring(year(array.get(year_time, yi))), text_size=performance_text_size, bgcolor = color.gray)
+            
+            y_color = array.get(year_pnl, yi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.gray, transp = 40)
+            table.cell(monthly_table, 13, yi + 1, str.tostring(math.round(array.get(year_pnl, yi) * 100, 1)), bgcolor = y_color, text_size=performance_text_size, text_color=color.new(color.white, 0))
+            
+        for mi = 0 to array.size(month_time) - 1
+            m_row   = year(array.get(month_time, mi))  - year(array.get(year_time, 0)) + 1
+            m_col   = month(array.get(month_time, mi)) 
+            m_color = array.get(month_pnl, mi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.gray, transp = 40)
+            
+            table.cell(monthly_table, m_col, m_row, str.tostring(math.round(array.get(month_pnl, mi) * 100, 1)), bgcolor = m_color, text_size=performance_text_size, text_color=color.new(color.white, 0))
+
+// ~~ Tooltips {
+t1 ="PriceValue selects the method of price computation. \n\nSets the smoothing period for the PriceValue. \n\nAdjusting these settings will change the input values for the K-Nearest Neighbors algorithm, influencing how the trend is calculated."
+t2 = "TargetValue specifies the target to evaluate. \n\nSets the smoothing period for the TargetValue."
+t3 ="numberOfClosestValues sets the number of closest values that are considered when calculating the KNN Moving Average. Adjusting this number will affect the sensitivity of the trend line, with a higher value leading to a smoother line and a lower value resulting in a line that is more responsive to recent price changes."
+t4 ="smoothingPeriod sets the period for the moving average applied to the KNN classifier. Adjusting the smoothing period will affect how rapidly the trend line responds to price changes, with a larger smoothing period leading to a smoother line that may lag recent price movements, and a smaller smoothing period resulting in a line that more closely tracks recent changes."
+t5 ="This option controls the background color for the trend prediction. Enabling it will change the background color based on the prediction, providing visual cues on the direction of the trend. A green color indicates a positive prediction, while red indicates a negative prediction."
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Inputs {
+PriceValue   = input.string("hl2", options = ["hl2","VWAP", "sma", "wma", "ema", "hma"], group="", inline="Value")
+maLen        = input.int(5, minval=2, maxval=200, title="", group="", inline="Value", tooltip=t1)
+TargetValue  = input.string("Price Action", options = ["Price Action","VWAP", "Volatility", "sma", "wma", "ema", "hma"], group="", inline="Target")
+maLen_       = input.int(5, minval=2, maxval=200, title="", group="", inline="Target", tooltip=t2)
+// Input parameters for the KNN Moving Average
+numberOfClosestValues = input.int(3, "Number of Closest Values", 2, 200, tooltip=t3) 
+smoothingPeriod       = input.int(50, "Smoothing Period", 2, 500, tooltip=t4) 
+windowSize            = math.max(numberOfClosestValues, 30) 
+
+// knn Color
+Upknn_col   = input.color(color.lime, title="", group="KNN Color", inline="knn col")
+Dnknn_col   = input.color(color.red, title="", group="KNN Color", inline="knn col")
+Neuknn_col  = input.color(color.orange, title="", group="KNN Color", inline="knn col")
+// MA knn Color
+Maknn_col   = input.color(color.teal, title="", group="MA KNN Color", inline="MA knn col")
+// BG Color
+bgcolor = input.bool(false, title="Trend Prediction Color", group="BG Color", inline="bg", tooltip=t5)
+Up_col  = input.color(color.lime, title="", group="BG Color", inline="bg")
+Dn_col  = input.color(color.red, title="", group="BG Color", inline="bg")
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ kNN Classifier {
+value_in = switch PriceValue
+    "hl2"  => ta.sma(hl2,maLen)
+    "VWAP" => ta.vwap(close[maLen])
+    "sma" => ta.sma(close,maLen)
+    "wma" => ta.wma(close,maLen)
+    "ema" => ta.ema(close,maLen)
+    "hma" => ta.hma(close,maLen)
+
+meanOfKClosest(value_,target_) => 
+    closestDistances = array.new_float(numberOfClosestValues, 1e10) 
+    closestValues    = array.new_float(numberOfClosestValues, 0.0) 
+    for i = 1 to windowSize 
+        value = value_[i] 
+        distance = math.abs(target_ - value) 
+        maxDistIndex = 0 
+        maxDistValue = closestDistances.get(0) 
+        for j = 1 to numberOfClosestValues - 1 
+            if closestDistances.get(j) > maxDistValue
+                maxDistIndex := j
+                maxDistValue := closestDistances.get(j)
+        if distance < maxDistValue 
+            array.set(closestDistances, maxDistIndex, distance)
+            array.set(closestValues, maxDistIndex, value)
+    closestValues.sum() / numberOfClosestValues 
+
+// Choose the target input based on user selection
+target_in = switch TargetValue
+    "Price Action"  => ta.rma(close,maLen_) 
+    "VWAP"          => ta.vwap(close[maLen_])
+    "Volatility"    => ta.atr(14)
+    "sma" => ta.sma(close,maLen_)
+    "wma" => ta.wma(close,maLen_)
+    "ema" => ta.ema(close,maLen_)
+    "hma" => ta.hma(close,maLen_)
+
+knnMA = meanOfKClosest(value_in,target_in)
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ kNN Prediction {
+// Function to calculate KNN Classifier
+price = math.avg(knnMA, close)
+c     = ta.rma(knnMA[1], smoothingPeriod) 
+o     = ta.rma(knnMA, smoothingPeriod)
+
+// Defines KNN function to perform classification
+knn(price) => 
+    Pos_count = 0 
+    Neg_count = 0 
+    min_distance = 10e10 
+    nearest_index = 0 
+    for j = 1 to 10 
+        distance = math.sqrt(math.pow(price[j] - price, 2)) 
+        if distance < min_distance 
+            min_distance := distance
+            nearest_index := j
+            Neg = c[nearest_index] > o[nearest_index] 
+            Pos = c[nearest_index] < o[nearest_index] 
+            if Pos 
+                Pos_count += 1
+            if Neg 
+                Neg_count += 1
+    output = Pos_count>Neg_count?1:-1 
+
+// Calls KNN function and smooths the prediction
+knn_prediction_raw = knn(price) 
+knn_prediction     = ta.wma(knn_prediction_raw, 3)
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Plots {
+// Plots for display on the chart
+knnMA_          = ta.wma(knnMA,5)
+knnMA_col       = knnMA_>knnMA_[1]?Upknn_col:knnMA_<knnMA_[1]?Dnknn_col:Neuknn_col
+Classifier_Line = plot(knnMA_,"Knn Classifier Line", knnMA_col)
+MAknn_          = ta.rma(knnMA, smoothingPeriod)
+plot(MAknn_,"Average Knn Classifier Line" ,Maknn_col) 
+green = knn_prediction < 0.5
+red   = knn_prediction > -0.5 
+bgcolor( green and bgcolor? color.new(Dn_col,80) : 
+ red and bgcolor ? color.new(Up_col,80) : na) 
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Alerts {
+knnMA_cross_Over_Ma      = ta.crossover(knnMA_,MAknn_)
+knnMA_cross_Under_Ma     = ta.crossunder(knnMA_,MAknn_)
+knnMA_cross_Over_Close   = ta.crossover(knnMA_,close)
+knnMA_cross_Under_Close  = ta.crossunder(knnMA_,close)
+knnMA_Switch_Up          = knnMA_[1]<knnMA_ and knnMA_[1]<=knnMA_[2]
+knnMA_Switch_Dn          = knnMA_[1]>knnMA_ and knnMA_[1]>=knnMA_[2]
+knnMA_Neutral            = knnMA_col==Neuknn_col and knnMA_col[1]!=Neuknn_col
+greenBG                  = green and not green[1]
+redBG                    = red and not red[1]
+
+alertcondition(knnMA_cross_Over_Ma,  title = "Knn Crossover Average Knn",  message = "Knn Crossover Average Knn")
+alertcondition(knnMA_cross_Under_Ma, title = "Knn Crossunder Average Knn", message = "Knn Crossunder Average Knn")
+alertcondition(knnMA_cross_Over_Close,  title = "Knn Crossover Close",  message = "Knn Crossover Close")
+alertcondition(knnMA_cross_Under_Close, title = "Knn Crossunder Close", message = "Knn Crossunder Close")
+alertcondition(knnMA_Switch_Up,  title = "Knn Switch Up",  message = "Knn Switch Up")
+alertcondition(knnMA_Switch_Dn, title = "Knn Switch Dn", message = "Knn Switch Dn")
+alertcondition(knnMA_Neutral, title = "Knn is Neutral", message = "Knn is Neutral")
+alertcondition(greenBG, title = "Positive Prediction", message = "Positive Prediction")
+alertcondition(redBG, title = "Negative Prediction", message = "Negative Prediction")
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+//@version=5
+//@strategy_alert_message {{strategy.order.alert_message}}
+// ************************************** POA ************************************** //
+import PineCoders/Time/4
+import dokang/POA/13 as POA
+
+// 시작시간, 종료시간 설정W
+start_time = input.time(timestamp("2024-01-01T22:05:00+09:00"), title="자동매매 시작")
+end_time = input.time(timestamp("2035-05-19T10:48:00+09:00"), title="자동매매 종료")
+
+backtest = input.bool(true)
+
+var bool afterStartDate = na
+if backtest
+    afterStartDate := (time >= start_time and time < end_time)
+else
+    afterStartDate := (time >= timenow)
+
+// 포아봇 설정
+lever = input(20)
+pstrategy = POA.bot.new("nietzschemy2", start_time, end_time, leverage = lever)
+pstrategy.start_trade()
+// ********************************************************************************* //
+
+strategy("(long) 다이버 역추세", overlay=true, pyramiding=9, default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+ initial_capital=5000, commission_type=strategy.commission.percent, commission_value=0.05, process_orders_on_close=false)
+
+// 설정
+leverage = lever // 레버리지 비율 설정
+initialCapital = input.int(5000, step=1)
+feePercent = (0.05 / 100)
+
+reinvest = input.bool(title="수익재투자", defval=true)
+reinvestperc = input.float(title="수익재투자비율", defval=100.0)
+entry_base = input.float(0.7, step=0.1)
+
+var float initialBuyAmount = na
+
+
+
+if reinvest
+    initialBuyAmount := (strategy.initial_capital + strategy.netprofit * reinvestperc / 100) / (100.0/entry_base)
+else
+    initialBuyAmount := initialCapital / (100.0/entry_base)
+
+var float avgPrice = na
+var float totalAmount = 0
+var float totalCost = 0
+var int buyCount = 0
+var float avgSellPrice = na
+var float totalSellAmount = 0
+var float totalSellCost = 0
+var int sellCount = 0
+var int redCandleCount = 0  // 연속 음봉 카운트 변수
+var bool tradeExecuted = false  // 현재 캔들에서 거래가 실행되었는지 여부
+var float sellPnL = 0
+var float finalSellPrice = na
+
+var PriceArray = array.new_float(0, 0)
+var buyAmountArray = array.new_int(0, 0)
+var buyAmountArraystack = array.new_int(0, 0)
+var float finalPrice = 0.0
+
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © LonesomeTheBlue
+
+prd = input.int(defval = 5, title = "Pivot Period", minval = 1, maxval = 50)
+source = input.string(defval = "High/Low", title = "Source for Pivot Points", options = ["Close", "High/Low"])
+searchdiv = input.string(defval = "Regular/Hidden", title = "Divergence Type", options = ["Regular", "Hidden", "Regular/Hidden"])
+showindis = input.string(defval = "Don't Show", title = "Show Indicator Names", options = ["Full", "First Letter", "Don't Show"])
+showlimit = input.int(1, title="Minimum Number of Divergence", minval = 1, maxval = 11)
+maxpp = input.int(defval = 10, title = "Maximum Pivot Points to Check", minval = 1, maxval = 20)
+maxbars = input.int(defval = 100, title = "Maximum Bars to Check", minval = 30, maxval = 200)
+shownum = input(defval = false, title = "Show Divergence Number")
+showlast = input(defval = false, title = "Show Only Last Divergence")
+dontconfirm = input(defval = false, title = "Don't Wait for Confirmation")
+showlines = input(defval = false, title = "Show Divergence Lines")
+showpivot = input(defval = false, title = "Show Pivot Points")
+calcmacd = input(defval = true, title = "MACD")
+calcmacda = input(defval = true, title = "MACD Histogram")
+calcrsi = input(defval = true, title = "RSI")
+calcstoc = input(defval = true, title = "Stochastic")
+calccci = input(defval = true, title = "CCI")
+calcmom = input(defval = true, title = "Momentum")
+calcobv = input(defval = true, title = "OBV")
+calcvwmacd = input(true, title = "VWmacd")
+calccmf = input(true, title = "Chaikin Money Flow")
+calcmfi = input(true, title = "Money Flow Index")
+calcext = input(true, title = "Check External Indicator")
+externalindi = input(defval = close, title = "External Indicator")
+pos_reg_div_col = input(defval = color.yellow, title = "Positive Regular Divergence")
+neg_reg_div_col = input(defval = color.navy, title = "Negative Regular Divergence")
+pos_hid_div_col = input(defval = color.lime, title = "Positive Hidden Divergence")
+neg_hid_div_col = input(defval = color.red, title = "Negative Hidden Divergence")
+pos_div_text_col = input(defval = color.black, title = "Positive Divergence Text Color")
+neg_div_text_col = input(defval = color.white, title = "Negative Divergence Text Color")
+reg_div_l_style_ = input.string(defval = "Solid", title = "Regular Divergence Line Style", options = ["Solid", "Dashed", "Dotted"])
+hid_div_l_style_ = input.string(defval = "Dashed", title = "Hdden Divergence Line Style", options = ["Solid", "Dashed", "Dotted"])
+reg_div_l_width = input.int(defval = 2, title = "Regular Divergence Line Width", minval = 1, maxval = 5)
+hid_div_l_width = input.int(defval = 1, title = "Hidden Divergence Line Width", minval = 1, maxval = 5)
+showmas = input(defval = false, title = "Show MAs 50 & 200", inline = "ma12")
+cma1col = input(defval = color.lime, title = "", inline = "ma12")
+cma2col = input(defval = color.red, title = "", inline = "ma12")
+
+plot(showmas ? ta.sma(close, 50) : na, color = showmas ? cma1col : na)
+plot(showmas ? ta.sma(close, 200) : na, color = showmas ? cma2col: na)
+
+// set line styles
+var reg_div_l_style = reg_div_l_style_ == "Solid" ? line.style_solid : 
+                       reg_div_l_style_ == "Dashed" ? line.style_dashed :
+                       line.style_dotted
+var hid_div_l_style = hid_div_l_style_ == "Solid" ? line.style_solid : 
+                       hid_div_l_style_ == "Dashed" ? line.style_dashed :
+                       line.style_dotted
+
+
+// get indicators
+rsi = ta.rsi(close, 14) // RSI
+[macd, signal, deltamacd] = ta.macd(close, 12, 26, 9) // MACD
+moment = ta.mom(close, 10) // Momentum
+cci = ta.cci(close, 10) // CCI
+Obv = ta.obv // OBV
+stk = ta.sma(ta.stoch(close, high, low, 14), 3) // Stoch
+maFast = ta.vwma(close, 12)
+maSlow = ta.vwma(close, 26)
+vwmacd = maFast - maSlow // Volume Weighted MACD
+Cmfm = ((close - low) - (high - close)) / (high - low)
+Cmfv = Cmfm * volume
+cmf = ta.sma(Cmfv, 21) / ta.sma(volume, 21) // Chaikin Money Flow
+Mfi = ta.mfi(hlc3, 14) // Money Flow Index
+
+// keep indicators names and colors in arrays
+var indicators_name = array.new_string(11)
+var div_colors = array.new_color(4)
+if barstate.isfirst
+    // names
+    array.set(indicators_name, 0, showindis == "Full" ? "MACD" : "M")
+    array.set(indicators_name, 1, showindis == "Full" ? "Hist" : "H")
+    array.set(indicators_name, 2, showindis == "Full" ? "RSI" : "E")
+    array.set(indicators_name, 3, showindis == "Full" ? "Stoch" : "S")
+    array.set(indicators_name, 4, showindis == "Full" ? "CCI" : "C")
+    array.set(indicators_name, 5, showindis == "Full" ? "MOM" : "M")
+    array.set(indicators_name, 6, showindis == "Full" ? "OBV" : "O")
+    array.set(indicators_name, 7, showindis == "Full" ? "VWMACD" : "V")
+    array.set(indicators_name, 8, showindis == "Full" ? "CMF" : "C")
+    array.set(indicators_name, 9, showindis == "Full" ? "MFI" : "M")
+    array.set(indicators_name,10, showindis == "Full" ? "Extrn" : "X")
+    //colors
+    array.set(div_colors, 0, pos_reg_div_col)
+    array.set(div_colors, 1, neg_reg_div_col)
+    array.set(div_colors, 2, pos_hid_div_col)
+    array.set(div_colors, 3, neg_hid_div_col)
+
+// Check if we get new Pivot High Or Pivot Low
+float ph = ta.pivothigh((source == "Close" ? close : high), prd, prd)
+float pl = ta.pivotlow((source == "Close" ? close : low), prd, prd)
+
+plotshape(ph and showpivot, text = "H", style = shape.labeldown, color = color.new(color.white, 100), textcolor = color.red, location = location.abovebar, offset = -prd)
+plotshape(pl and showpivot, text = "L", style = shape.labelup, color = color.new(color.white, 100), textcolor = color.lime, location = location.belowbar, offset = -prd)
+
+// keep values and positions of Pivot Highs/Lows in the arrays
+var int maxarraysize = 20
+var ph_positions = array.new_int(maxarraysize, 0)
+var pl_positions = array.new_int(maxarraysize, 0)
+var ph_vals = array.new_float(maxarraysize, 0.)
+var pl_vals = array.new_float(maxarraysize, 0.)
+
+// add PHs to the array
+if ph
+    array.unshift(ph_positions, bar_index)
+    array.unshift(ph_vals, ph)
+    if array.size(ph_positions) > maxarraysize
+        array.pop(ph_positions)
+        array.pop(ph_vals)
+
+// add PLs to the array
+if pl
+    array.unshift(pl_positions, bar_index)
+    array.unshift(pl_vals, pl)
+    if array.size(pl_positions) > maxarraysize
+        array.pop(pl_positions)
+        array.pop(pl_vals)
+
+// functions to check Regular Divergences and Hidden Divergences
+
+// function to check positive regular or negative hidden divergence
+// cond == 1 => positive_regular, cond == 2=> negative_hidden
+positive_regular_positive_hidden_divergence(src, cond)=>
+    divlen = 0
+    prsc = source == "Close" ? close : low
+    // if indicators higher than last value and close price is higher than las close 
+    if dontconfirm or src > src[1] or close > close[1]
+        startpoint = dontconfirm ? 0 : 1 // don't check last candle
+        // we search last 15 PPs
+        for x = 0 to maxpp - 1
+            len = bar_index - array.get(pl_positions, x) + prd
+            // if we reach non valued array element or arrived 101. or previous bars then we don't search more
+            if array.get(pl_positions, x) == 0 or len > maxbars
+                break
+            if len > 5 and 
+               ((cond == 1 and src[startpoint] > src[len] and prsc[startpoint] < nz(array.get(pl_vals, x))) or
+               (cond == 2 and src[startpoint] < src[len] and prsc[startpoint] > nz(array.get(pl_vals, x))))
+                slope1 = (src[startpoint] - src[len]) / (len - startpoint)
+                virtual_line1 = src[startpoint] - slope1
+                slope2 = (close[startpoint] - close[len]) / (len - startpoint)
+                virtual_line2 = close[startpoint] - slope2
+                arrived = true
+                for y = 1 + startpoint to len - 1
+                    if src[y] < virtual_line1 or nz(close[y]) < virtual_line2
+                        arrived := false
+                        break
+                    virtual_line1 := virtual_line1 - slope1
+                    virtual_line2 := virtual_line2 - slope2
+                
+                if arrived
+                    divlen := len
+                    break
+    divlen
+
+// function to check negative regular or positive hidden divergence
+// cond == 1 => negative_regular, cond == 2=> positive_hidden
+negative_regular_negative_hidden_divergence(src, cond)=>
+    divlen = 0
+    prsc = source == "Close" ? close : high
+    // if indicators higher than last value and close price is higher than las close 
+    if dontconfirm or src < src[1] or close < close[1]
+        startpoint = dontconfirm ? 0 : 1 // don't check last candle
+        // we search last 15 PPs
+        for x = 0 to maxpp - 1
+            len = bar_index - array.get(ph_positions, x) + prd
+            // if we reach non valued array element or arrived 101. or previous bars then we don't search more
+            if array.get(ph_positions, x) == 0 or len > maxbars
+                break
+            if len > 5 and 
+               ((cond == 1 and src[startpoint] < src[len] and prsc[startpoint] > nz(array.get(ph_vals, x))) or 
+               (cond == 2 and src[startpoint] > src[len] and prsc[startpoint] < nz(array.get(ph_vals, x))))
+                slope1 = (src[startpoint] - src[len]) / (len - startpoint)
+                virtual_line1 = src[startpoint] - slope1
+                slope2 = (close[startpoint] - nz(close[len])) / (len - startpoint)
+                virtual_line2 = close[startpoint] - slope2
+                arrived = true
+                for y = 1 + startpoint to len - 1
+                    if src[y] > virtual_line1 or nz(close[y]) > virtual_line2
+                        arrived := false
+                        break
+                    virtual_line1 := virtual_line1 - slope1
+                    virtual_line2 := virtual_line2 - slope2
+                
+                if arrived
+                    divlen := len
+                    break
+    divlen
+
+// calculate 4 types of divergence if enabled in the options and return divergences in an array
+calculate_divs(cond, indicator)=>
+    divs = array.new_int(4, 0)
+    array.set(divs, 0, cond and (searchdiv == "Regular" or searchdiv == "Regular/Hidden") ? positive_regular_positive_hidden_divergence(indicator, 1) : 0)
+    array.set(divs, 1, cond and (searchdiv == "Regular" or searchdiv == "Regular/Hidden") ? negative_regular_negative_hidden_divergence(indicator, 1) : 0)
+    array.set(divs, 2, cond and (searchdiv == "Hidden" or searchdiv == "Regular/Hidden")  ? positive_regular_positive_hidden_divergence(indicator, 2) : 0)
+    array.set(divs, 3, cond and (searchdiv == "Hidden" or searchdiv == "Regular/Hidden")  ? negative_regular_negative_hidden_divergence(indicator, 2) : 0)
+    divs
+
+// array to keep all divergences
+var all_divergences = array.new_int(44) // 11 indicators * 4 divergence = 44 elements
+// set related array elements
+array_set_divs(div_pointer, index)=>
+    for x = 0 to 3
+        array.set(all_divergences, index * 4 + x, array.get(div_pointer, x))
+
+// set divergences array 
+array_set_divs(calculate_divs(calcmacd, macd), 0)
+array_set_divs(calculate_divs(calcmacda, deltamacd), 1)
+array_set_divs(calculate_divs(calcrsi, rsi), 2)
+array_set_divs(calculate_divs(calcstoc, stk), 3)
+array_set_divs(calculate_divs(calccci, cci), 4)
+array_set_divs(calculate_divs(calcmom, moment), 5)
+array_set_divs(calculate_divs(calcobv, Obv), 6)
+array_set_divs(calculate_divs(calcvwmacd, vwmacd), 7)
+array_set_divs(calculate_divs(calccmf, cmf), 8)
+array_set_divs(calculate_divs(calcmfi, Mfi), 9)
+array_set_divs(calculate_divs(calcext, externalindi), 10)
+
+// check minimum number of divergence, if less than showlimit then delete all divergence
+
+// 초기 변수 설정
+var int total_div = 0
+
+// 모든 다이버전스 합계 계산
+for x = 0 to array.size(all_divergences) - 1
+    total_div += math.round(math.sign(array.get(all_divergences, x)))
+
+// 다이버전스 합계가 showlimit보다 적으면 모든 다이버전스 삭제
+if total_div < showlimit
+    array.fill(all_divergences, 0)
+
+// keep line in an array
+var pos_div_lines = array.new_line(0)
+var neg_div_lines = array.new_line(0)
+var pos_div_labels = array.new_label(0)
+var neg_div_labels = array.new_label(0) 
+
+// remove old lines and labels if showlast option is enabled
+delete_old_pos_div_lines()=>
+    if array.size(pos_div_lines) > 0    
+        for j = 0 to array.size(pos_div_lines) - 1 
+            line.delete(array.get(pos_div_lines, j))
+        array.clear(pos_div_lines)
+
+delete_old_neg_div_lines()=>
+    if array.size(neg_div_lines) > 0    
+        for j = 0 to array.size(neg_div_lines) - 1 
+            line.delete(array.get(neg_div_lines, j))
+        array.clear(neg_div_lines)
+
+delete_old_pos_div_labels()=>
+    if array.size(pos_div_labels) > 0 
+        for j = 0 to array.size(pos_div_labels) - 1 
+            label.delete(array.get(pos_div_labels, j))
+        array.clear(pos_div_labels)
+
+delete_old_neg_div_labels()=>
+    if array.size(neg_div_labels) > 0    
+        for j = 0 to array.size(neg_div_labels) - 1 
+            label.delete(array.get(neg_div_labels, j))
+        array.clear(neg_div_labels)
+
+// delete last creted lines and labels until we met new PH/PV 
+delete_last_pos_div_lines_label(n)=>
+    if n > 0 and array.size(pos_div_lines) >= n    
+        asz = array.size(pos_div_lines)
+        for j = 1 to n
+            line.delete(array.get(pos_div_lines, asz - j))
+            array.pop(pos_div_lines)
+        if array.size(pos_div_labels) > 0  
+            label.delete(array.get(pos_div_labels, array.size(pos_div_labels) - 1))
+            array.pop(pos_div_labels)
+
+delete_last_neg_div_lines_label(n)=>
+    if n > 0 and array.size(neg_div_lines) >= n    
+        asz = array.size(neg_div_lines)
+        for j = 1 to n
+            line.delete(array.get(neg_div_lines, asz - j))
+            array.pop(neg_div_lines)
+        if array.size(neg_div_labels) > 0  
+            label.delete(array.get(neg_div_labels, array.size(neg_div_labels) - 1))
+            array.pop(neg_div_labels)
+            
+// variables for Alerts
+pos_reg_div_detected = false
+neg_reg_div_detected = false
+pos_hid_div_detected = false
+neg_hid_div_detected = false
+
+// to remove lines/labels until we met new // PH/PL
+var last_pos_div_lines = 0
+var last_neg_div_lines = 0
+var remove_last_pos_divs = false 
+var remove_last_neg_divs = false
+if pl
+    remove_last_pos_divs := false
+    last_pos_div_lines := 0
+if ph
+    remove_last_neg_divs := false
+    last_neg_div_lines := 0
+
+// draw divergences lines and labels
+divergence_text_top = ""
+divergence_text_bottom = ""
+distances = array.new_int(0)
+dnumdiv_top = 0
+dnumdiv_bottom = 0
+top_label_col = color.white
+bottom_label_col = color.white
+old_pos_divs_can_be_removed = true
+old_neg_divs_can_be_removed = true
+startpoint = dontconfirm ? 0 : 1 // used for don't confirm option
+
+for x = 0 to 10
+    div_type = -1
+    for y = 0 to 3
+        if array.get(all_divergences, x * 4 + y) > 0 // any divergence?
+            div_type := y
+            if (y % 2) == 1 
+                dnumdiv_top := dnumdiv_top + 1
+                top_label_col := array.get(div_colors, y)
+            if (y % 2) == 0
+                dnumdiv_bottom := dnumdiv_bottom + 1
+                bottom_label_col := array.get(div_colors, y)
+            if not array.includes(distances, array.get(all_divergences, x * 4 + y))  // line not exist ?
+                array.push(distances, array.get(all_divergences, x * 4 + y))
+                new_line = showlines ? line.new(x1 = bar_index - array.get(all_divergences, x * 4 + y), 
+                          y1 = (source == "Close" ? close[array.get(all_divergences, x * 4 + y)] : 
+                                           (y % 2) == 0 ? low[array.get(all_divergences, x * 4 + y)] : 
+                                                          high[array.get(all_divergences, x * 4 + y)]),
+                          x2 = bar_index - startpoint,
+                          y2 = (source == "Close" ? close[startpoint] : 
+                                           (y % 2) == 0 ? low[startpoint] : 
+                                                          high[startpoint]),
+                          color = array.get(div_colors, y),
+                          style = y < 2 ? reg_div_l_style : hid_div_l_style,
+                          width = y < 2 ? reg_div_l_width : hid_div_l_width
+                          )
+                          : na
+                if (y % 2) == 0
+                    if old_pos_divs_can_be_removed
+                        old_pos_divs_can_be_removed := false
+                        if not showlast and remove_last_pos_divs
+                            delete_last_pos_div_lines_label(last_pos_div_lines)
+                            last_pos_div_lines := 0
+                        if showlast
+                            delete_old_pos_div_lines()
+                    array.push(pos_div_lines, new_line)
+                    last_pos_div_lines := last_pos_div_lines + 1
+                    remove_last_pos_divs := true
+                    
+                if (y % 2) == 1
+                    if old_neg_divs_can_be_removed
+                        old_neg_divs_can_be_removed := false
+                        if not showlast and remove_last_neg_divs
+                            delete_last_neg_div_lines_label(last_neg_div_lines)
+                            last_neg_div_lines := 0
+                        if showlast
+                            delete_old_neg_div_lines()
+                    array.push(neg_div_lines, new_line)
+                    last_neg_div_lines := last_neg_div_lines + 1
+                    remove_last_neg_divs := true
+                    
+            // set variables for alerts
+            if y == 0
+                pos_reg_div_detected := true
+            if y == 1
+                neg_reg_div_detected := true
+            if y == 2
+                pos_hid_div_detected := true
+            if y == 3
+                neg_hid_div_detected := true
+    // get text for labels
+    if div_type >= 0
+        divergence_text_top    := divergence_text_top    + ((div_type % 2) == 1 ? (showindis != "Don't Show" ? array.get(indicators_name, x) + "\n" : "") : "")
+        divergence_text_bottom := divergence_text_bottom + ((div_type % 2) == 0 ? (showindis != "Don't Show" ? array.get(indicators_name, x) + "\n" : "") : "")
+
+// 조건에 따른 레이블 생성
+if showindis != "Don't Show" or shownum
+    if shownum and dnumdiv_top > 0
+        divergence_text_top := divergence_text_top + str.tostring(dnumdiv_top)
+    if shownum and dnumdiv_bottom > 0
+        divergence_text_bottom := divergence_text_bottom + str.tostring(dnumdiv_bottom)
+    
+    if divergence_text_top != ""
+        if showlast
+            delete_old_neg_div_labels()
+        array.push(neg_div_labels, 
+                      label.new( x = bar_index, 
+                                 y = math.max(high, high[1]), 
+                                 text = divergence_text_top,
+                                 color = top_label_col,
+                                 textcolor = neg_div_text_col,
+                                 style = label.style_label_down
+                                 ))
+                                 
+    if divergence_text_bottom != ""
+        if showlast
+            delete_old_pos_div_labels()
+        array.push(pos_div_labels, 
+                      label.new( x = bar_index, 
+                                 y = math.min(low, low[1]), 
+                                 text = divergence_text_bottom,
+                                 color = bottom_label_col, 
+                                 textcolor = pos_div_text_col,
+                                 style = label.style_label_up
+                                 ))
+
+entry_type = input.string("Safe9", '진입방식', options=["피보나치", "Safe9", "마틴게일"])
+
+if array.size(buyAmountArray) == 0 and entry_type == "피보나치"
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 2)
+    array.push(buyAmountArray, 3)
+    array.push(buyAmountArray, 5)
+    array.push(buyAmountArray, 8)
+    array.push(buyAmountArray, 13)
+    array.push(buyAmountArray, 21)
+    array.push(buyAmountArray, 34)
+    array.push(buyAmountArraystack, 1)
+    array.push(buyAmountArraystack, 2)
+    array.push(buyAmountArraystack, 4)
+    array.push(buyAmountArraystack, 7)
+    array.push(buyAmountArraystack, 12)
+    array.push(buyAmountArraystack, 20)
+    array.push(buyAmountArraystack, 33)
+    array.push(buyAmountArraystack, 54)
+    array.push(buyAmountArraystack, 88)
+
+if array.size(buyAmountArray) == 0 and entry_type == "Safe9"
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 2)
+    array.push(buyAmountArray, 3)
+    array.push(buyAmountArray, 5)
+    array.push(buyAmountArray, 8)
+    array.push(buyAmountArray, 13)
+    array.push(buyAmountArray, 21)
+    array.push(buyAmountArraystack, 1)
+    array.push(buyAmountArraystack, 2)
+    array.push(buyAmountArraystack, 3)
+    array.push(buyAmountArraystack, 4)
+    array.push(buyAmountArraystack, 6)
+    array.push(buyAmountArraystack, 9)
+    array.push(buyAmountArraystack, 14)
+    array.push(buyAmountArraystack, 22)
+    array.push(buyAmountArraystack, 35)
+    array.push(buyAmountArraystack, 56)
+
+if array.size(buyAmountArray) == 0 and entry_type == "마틴게일"
+    //array.push(buyAmountArray, 1)
+    //array.push(buyAmountArray, 2)
+    //array.push(buyAmountArray, 4)
+    //array.push(buyAmountArray, 8)
+    //array.push(buyAmountArray, 16)
+    //array.push(buyAmountArray, 32)
+    //array.push(buyAmountArray, 64)
+    //array.push(buyAmountArraystack, 1)
+    //array.push(buyAmountArraystack, 3)
+    //array.push(buyAmountArraystack, 7)
+    //array.push(buyAmountArraystack, 15)
+    //array.push(buyAmountArraystack, 31)
+    //array.push(buyAmountArraystack, 63)
+    //array.push(buyAmountArraystack, 127)
+    array.push(buyAmountArray, 1)
+    array.push(buyAmountArray, 3)
+    array.push(buyAmountArray, 5)
+    array.push(buyAmountArray, 10)
+    array.push(buyAmountArray, 20)
+    array.push(buyAmountArray, 32)
+    array.push(buyAmountArray, 64)
+    array.push(buyAmountArraystack, 1)
+    array.push(buyAmountArraystack, 4)
+    array.push(buyAmountArraystack, 9)
+    array.push(buyAmountArraystack, 19)
+    array.push(buyAmountArraystack, 39)
+    array.push(buyAmountArraystack, 63)
+    array.push(buyAmountArraystack, 127)
+// 캔들 조건
+RedCandleN = input.float(0.05, step=0.1)
+isRedCandle = close < open
+largeRedCandle = (open - close) / open >= RedCandleN/100
+
+// 0.35% 이상의 음봉이 연속으로 몇 개 나왔는지 체크
+if largeRedCandle
+    redCandleCount := redCandleCount + 1
+else
+    redCandleCount := 0
+
+ticker_symbol = array.get(str.split(syminfo.ticker, "USDT")[0], 0)
+
+timestamp_now = str.format_time(timenow)
+
+
+market = input.string("bybit", 'market', options=["binance", "okx", "bybit"])
+
+var string longentry = na
+var string shortentry = na
+var string longexit = na
+var string shortexit = na
+
+if market == "binance"
+    longentry := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":'
+    shortentry := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":'
+    longexit := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":'
+    shortexit := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":'
+
+if market == "okx"
+
+    longentry := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":'
+    shortentry := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":'
+    longexit := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":'
+    shortexit := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":'
+
+if market == "bybit"
+
+    longentry := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":'
+    shortentry := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":'
+    longexit := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":'
+    shortexit := 'TVM:{"exchange":"bybit","account":"poa","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":'
+
+var bool ema_check = na
+
+ema_check_enable = input.bool(defval = true)
+ema_line = input.int(defval = 30)
+
+if ema_check_enable
+    ema_check := close <= ta.ema(close, ema_line)
+else
+    ema_check := true
+
+c1 = 4
+c2 = 13
+c3 = 50
+c4 = 60
+c5 = 3
+
+var bool enhanced_ema_check = na
+
+enhanced_ema_check_enable = input.bool(defval = true)
+
+if enhanced_ema_check_enable
+    if close > ta.ema(close, c1) and ta.ema(close, c1) > ta.ema(close, c2) and ta.ema(close, c2) > ta.ema(close, c3) and ta.ema(close, c3) > ta.ema(close, c4)
+        enhanced_ema_check := true
+    if close < ta.ema(close, c5)
+        enhanced_ema_check := false
+else
+    enhanced_ema_check := true
+
+if buyCount == 0 and not tradeExecuted and afterStartDate and redCandleCount >= 4 and ema_check //and ta.sma(close, 50) > ta.sma(close, 200)
+    buyCount := 1
+    totalAmount := initialBuyAmount 
+    totalCost := initialBuyAmount * close * (1 + feePercent)  // 수수료 포함
+    avgPrice := totalCost / totalAmount
+    pstrategy.entry("Buy 1", "strategy.long", qty=initialBuyAmount / close)  // 매수 금액을 계약 수로 변환
+    alert(longentry + str.tostring(entry_base*array.get(buyAmountArray, buyCount-1)) + ',"equity":"y","leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.push(PriceArray, close)
+    redCandleCount := 0  // 매수 후 카운트 초기화
+    tradeExecuted := true
+
+if array.size(PriceArray) > 0
+    finalPrice := array.get(PriceArray, array.size(PriceArray)-1)
+
+loss_close = input.int(9, step=1)
+loss_perc = input.float(0.5, step=0.01)
+
+safe_close = input.int(4, step=1)
+safe_close_perc = input.float(1.02, step=0.001)
+
+// 추가 매수 조건: 평단가보다 낮을 때 0.5% 이상의 음봉이 나오면 추가 매수
+SecondN = input.float(0.013, step=0.1)
+Mod_SecondN_Val = input.float(2.5, step=0.1)
+var float Mod_SecondN = na
+//if buyCount < safe_close
+//    Mod_SecondN := SecondN
+//else
+//    Mod_SecondN := SecondN * Mod_SecondN_Val
+if enhanced_ema_check
+    Mod_SecondN := SecondN
+else
+    Mod_SecondN := SecondN * Mod_SecondN_Val
+if buyCount > 0 and buyCount < loss_close and not tradeExecuted and afterStartDate and dnumdiv_bottom > 0 and close < finalPrice and close < (finalPrice * (1 - Mod_SecondN))// and enhanced_ema_check
+    buyCount := buyCount + 1
+    float buyAmount = initialBuyAmount * array.get(buyAmountArray, buyCount-1)
+    totalAmount := totalAmount + buyAmount
+    totalCost := totalCost + buyAmount * close * (1 + feePercent)  // 수수료 포함
+    avgPrice := totalCost / totalAmount
+    pstrategy.entry("Buy " + str.tostring(buyCount), "strategy.long", qty=buyAmount / close)  // 매수 금액을 계약 수로 변환
+    alert(longentry + str.tostring(entry_base*array.get(buyAmountArray, buyCount-1)) + ',"equity":"y","leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.push(PriceArray, close)
+    tradeExecuted := true
+
+SellPerc = input.float(0.01, step=0.001)
+
+if false// buyCount == 6 and sellCount == 0 and not tradeExecuted and afterStartDate and close < finalPrice * 0.95 and ta.ema(close, 50) < ta.ema(close, 100) and (na(finalSellPrice) or finalSellPrice > close * 1.05) and dnumdiv_top > 0
+    sellCount := 1
+    float sellAmount = initialBuyAmount * 20
+    totalSellCost := sellAmount * close * (1 + feePercent)  // 수수료 포함
+    avgSellPrice := totalSellCost / sellAmount
+    pstrategy.entry("Sell hedge", "strategy.long", qty=sellAmount / close)  // 매수 금액을 계약 수로 변환
+    alert(shortentry + str.tostring(20*entry_base) + ',"equity":"y","leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    finalSellPrice := close
+    tradeExecuted := true
+
+if false //buyCount == 6 and sellCount == 1 and not tradeExecuted and afterStartDate and ta.ema(close, 50) > ta.ema(close, 100) and close > avgSellPrice
+    sellPnL := sellPnL - (close - avgSellPrice)/close * (totalSellCost/(avgSellPrice*1.0005))
+    pstrategy.close("Sell hedge")
+    alert(shortexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    sellCount := 0
+    avgSellPrice := na
+    totalSellCost := na
+    tradeExecuted := true
+
+if false //buyCount == 6 and sellCount == 1 and not tradeExecuted and afterStartDate and close > avgSellPrice * (1+SellPerc) and ta.ema(close, 50) > ta.ema(close, 100)
+    sellPnL := sellPnL - (close - avgSellPrice)/close * (totalSellCost/(avgSellPrice*1.0005))
+    pstrategy.close("Sell hedge")
+    alert(shortexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    sellCount := 0
+    avgSellPrice := na
+    totalSellCost := na
+    tradeExecuted := true
+
+if false //sellCount == 1 and not tradeExecuted and afterStartDate and (20 * (avgPrice * (1 + feePercent) - close)) < (30 * (avgSellPrice * (1 - feePercent) - close))
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))  // 1차 매수분을 제외한 모든 포지션 매도
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := na
+    avgPrice := na
+    buyCount := 0
+    sellPnL := sellPnL + (close - avgSellPrice)/close * (totalSellCost/(avgSellPrice*1.0005))
+    pstrategy.close("Sell hedge")
+    alert(shortexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    sellCount := 0
+    avgSellPrice := na
+    totalSellCost := na
+    finalSellPrice := na
+    tradeExecuted := true
+
+
+all_close = input.float(1.04, step=0.001)
+// 평단가보다 수수료를 더한 가격에 도달 시 모든 포지션 정리
+if buyCount > 1 and close >= avgPrice * (all_close + feePercent) and not tradeExecuted
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))
+        if array.size(PriceArray) > 0
+            array.pop(PriceArray)
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    buyCount := 0
+    finalSellPrice := na
+    tradeExecuted := true
+
+
+
+if buyCount >= loss_close and close <= finalPrice * (loss_perc - feePercent) and not tradeExecuted
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))
+        if array.size(PriceArray) > 0
+            array.pop(PriceArray)
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    buyCount := 0
+    finalSellPrice := na
+    tradeExecuted := true
+
+if buyCount >= safe_close and close >= avgPrice * (safe_close_perc + feePercent) and not tradeExecuted
+    for i = 1 to buyCount
+        pstrategy.close("Buy " + str.tostring(i))
+        if array.size(PriceArray) > 0
+            array.pop(PriceArray)
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    buyCount := 0
+    finalSellPrice := na
+    tradeExecuted := true
+    
+if array.size(PriceArray) > 0
+    finalPrice := array.get(PriceArray, array.size(PriceArray)-1)
+
+cycle = input.bool(title="순환매", defval=false)
+
+// 순환매
+cycle_close = input.float(1.007, step=0.001)
+//if buyCount > 0 and sellCount == 0 and not tradeExecuted and afterStartDate and array.size(PriceArray) > 0 and close >= finalPrice * (cycle_close + feePercent) and dnumdiv_top > 0 and cycle and close >= avgPrice
+if buyCount > loss_close-1 and not tradeExecuted and afterStartDate and close >= avgPrice * (cycle_close + feePercent) and cycle
+    pstrategy.close("Buy " + str.tostring(buyCount))
+    alert(longexit + str.tostring(50) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.pop(PriceArray)
+    float buyAmount = initialBuyAmount * array.get(buyAmountArray, buyCount-1)
+    totalAmount := totalAmount - buyAmount
+    totalCost := totalCost - (buyAmount * finalPrice * (1 + feePercent))
+    avgPrice := totalCost / totalAmount
+    buyCount := buyCount - 1
+    tradeExecuted := true
+
+// 익절 조건 (1차 매수 포지션의 10% 수익)
+TPN = input.float(40, step=0.1)
+takeProfitLevel = avgPrice * (1 + feePercent) * (1 + TPN/100 / leverage)
+
+if buyCount == 1 and not tradeExecuted and afterStartDate and dnumdiv_top > 0 and close >= takeProfitLevel and dnumdiv_top > 0
+    pstrategy.close("Buy 1")
+    alert(longexit + str.tostring(100) + ',"leverage":' + str.tostring(lever) + ',"margin_type":"cross","token":""}:MVT')
+    array.pop(PriceArray)
+    buyCount := 0
+    totalAmount := 0
+    totalCost := 0
+    avgPrice := na
+    finalSellPrice := na
+
+hf = ta.highest(high, 24)
+lf = ta.lowest(low, 24)
+center = ta.ema(close,24) // (hf + lf) / 2
+
+if strategy.position_size == 0
+    pstrategy.exit('▽', '"Buy " + str.tostring(buyCount)', limit=center)
+    pstrategy.exit('▽', '"Buy " + str.tostring(i)', limit=center)
+
+// 캔들이 끝날 때 tradeExecuted 변수를 초기화
+if (bar_index > 0 and bar_index[1] != bar_index)
+    tradeExecuted := false
+
+//Table
+
+PnL     = strategy.grossprofit - strategy.grossloss
+ex_PnL  = math.round(strategy.openprofit, 1)
+SellPnL  = math.round(sellPnL, 1)
+
+totalbalance  = strategy.initial_capital + strategy.netprofit
+
+used_equity   = math.round(strategy.position_avg_price * strategy.position_size)
+ratio_equity  = strategy.position_size > 0 ? math.round(used_equity / totalbalance * 100, 1) : 0
+
+mdd     = strategy.opentrades.max_drawdown(strategy.opentrades - 1)
+
+totalTrades   = strategy.closedtrades
+winningTrades = na(totalTrades) ? na : totalTrades - strategy.losstrades
+
+winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0
+
+profitFactor  = math.abs(strategy.grossprofit) > 0 ? strategy.grossprofit / math.abs(strategy.grossloss) : na
+
+avgBarsPerTrade() =>
+    sumBarsPerTrade = 0
+    for tradeNo = 0 to strategy.closedtrades - 1
+        // Loop through all closed trades, starting with the oldest.
+        sumBarsPerTrade += strategy.closedtrades.exit_bar_index(tradeNo) - strategy.closedtrades.entry_bar_index(tradeNo) + 1
+    result = nz(sumBarsPerTrade / strategy.closedtrades)
+
+//TABLE ----------------------------------------------------------------------------------------------------------------
+show_status           = input.bool(true,'', group='Status Table', inline='t1')
+status_text_size      = input.string(size.tiny, 'Size ', options=[size.tiny, size.small, size.normal], group='Status Table', inline='t1')
+status_table_position = input.string(position.bottom_left, 'Position ', options=[position.bottom_left, position.bottom_right, position.bottom_center, position.top_left, position.top_right, position.top_center], group='Status Table', inline='t1')
+
+show_performance           = input.bool(true, '', group='Profit Table', inline='t2')
+performance_text_size      = input.string(size.small, 'Size ', options=[size.tiny, size.small, size.normal], group='Profit Table', inline='t2')
+performance_table_position = input.string(position.bottom_right, 'Position ', options=[position.bottom_left, position.bottom_right, position.bottom_center, position.top_left, position.top_right, position.top_center], group='Profit Table', inline='t2')
+
+// ------------------------------------------------------------------------------------------------------------------ //
+
+profit_color1 = PnL > 0 ? color.lime : color.red
+profit_color2 = strategy.openprofit < 0 ? color.red : color.lime
+
+var Table = table.new(status_table_position, columns=10, rows=20, border_width=1, bgcolor=color.black, border_color=color.gray)
+
+if show_status
+    //table.cell(table_id=Table, column=0, row=0, text='Position Size', text_size=status_text_size, text_color=color.gray)
+    //table.cell(table_id=Table, column=0, row=1, text=str.tostring(strategy.position_size), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=0, row=0, text='Sell PnL', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=0, row=1, text=str.tostring(SellPnL), text_size=status_text_size, text_color=color.red)
+    table.cell(table_id=Table, column=0, row=2, text='Avg Price', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=0, row=3, text=str.tostring(math.round_to_mintick(strategy.position_avg_price)), text_size=status_text_size, text_color=color.green)
+
+    table.cell(table_id=Table, column=1, row=0, text='Unrealized PnL', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=1, row=1, text=str.tostring(math.round(strategy.openprofit, 1)) + ' ' + syminfo.currency, text_size=status_text_size, text_color=profit_color2)
+    table.cell(table_id=Table, column=1, row=2, text_color=color.gray, text_size=status_text_size, text='Net profit')
+    table.cell(table_id=Table, column=1, row=3, text=str.tostring(math.round(PnL, 1)) + ' ' + syminfo.currency, text_size=status_text_size, text_color=profit_color1)    
+
+    table.cell(table_id=Table, column=2, row=0, text='Win Rate', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=2, row=1, text=str.tostring(math.round(winRate, 1)), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=2, row=2, text='Profit Factor', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=2, row=3, text=str.tostring(math.round(profitFactor, 2)), text_size=status_text_size, text_color=color.olive)
+
+    table.cell(table_id=Table, column=4, row=0, text='Max Drawdown', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=4, row=1, text=str.tostring(math.round(mdd, 1)), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=4, row=2, text='Bars Per Trade', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=4, row=3, text=str.tostring(int(avgBarsPerTrade())), text_size=status_text_size, text_color=color.olive)
+
+if show_performance
+    new_month = month(time) != month(time[1])
+    new_year  = year(time)  != year(time[1])
+    
+    eq = strategy.initial_capital + strategy.netprofit
+    
+    bar_pnl = eq / eq[1] - 1
+    
+    cur_month_pnl = 0.0
+    cur_year_pnl  = 0.0
+    
+    // Current Monthly P&L
+    cur_month_pnl := new_month ? 0.0 : 
+                     (1 + cur_month_pnl[1]) * (1 + bar_pnl) - 1 
+    
+    // Current Yearly P&L
+    cur_year_pnl := new_year ? 0.0 : 
+                     (1 + cur_year_pnl[1]) * (1 + bar_pnl) - 1  
+    
+    // Arrays to store Yearly and Monthly P&Ls
+    var month_pnl  = array.new_float(0)
+    var month_time = array.new_int(0)
+    
+    var year_pnl  = array.new_float(0)
+    var year_time = array.new_int(0)
+    
+    last_computed = false
+    
+    if (not na(cur_month_pnl[1]) and (new_month or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(month_pnl)
+            array.pop(month_time)
+            
+        array.push(month_pnl , cur_month_pnl[1])
+        array.push(month_time, time[1])
+    
+    if (not na(cur_year_pnl[1]) and (new_year or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(year_pnl)
+            array.pop(year_time)
+            
+        array.push(year_pnl , cur_year_pnl[1])
+        array.push(year_time, time[1])
+    
+    last_computed := barstate.islastconfirmedhistory ? true : nz(last_computed[1])
+    
+    // Monthly P&L Table    
+    var monthly_table = table(na)
+    
+    if (barstate.islastconfirmedhistory)
+        monthly_table := table.new(performance_table_position, columns = 14, rows = array.size(year_pnl) + 1, border_width = 1)
+    
+        table.cell(monthly_table, 0,  0, "", text_size=performance_text_size,     bgcolor = color.gray)
+        table.cell(monthly_table, 1,  0, "Jan", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 2,  0, "Feb", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 3,  0, "Mar", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 4,  0, "Apr", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 5,  0, "May", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 6,  0, "Jun", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 7,  0, "Jul", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 8,  0, "Aug", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 9,  0, "Sep", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 10, 0, "Oct", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 11, 0, "Nov", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 12, 0, "Dec", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 13, 0, "Year", text_size=performance_text_size, bgcolor = color.gray)
+    
+    
+        for yi = 0 to array.size(year_pnl) - 1
+            table.cell(monthly_table, 0,  yi + 1, str.tostring(year(array.get(year_time, yi))), text_size=performance_text_size, bgcolor = color.gray)
+            
+            y_color = array.get(year_pnl, yi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.gray, transp = 40)
+            table.cell(monthly_table, 13, yi + 1, str.tostring(math.round(array.get(year_pnl, yi) * 100, 1)), bgcolor = y_color, text_size=performance_text_size, text_color=color.new(color.white, 0))
+            
+        for mi = 0 to array.size(month_time) - 1
+            m_row   = year(array.get(month_time, mi))  - year(array.get(year_time, 0)) + 1
+            m_col   = month(array.get(month_time, mi)) 
+            m_color = array.get(month_pnl, mi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.gray, transp = 40)
+            
+            table.cell(monthly_table, m_col, m_row, str.tostring(math.round(array.get(month_pnl, mi) * 100, 1)), bgcolor = m_color, text_size=performance_text_size, text_color=color.new(color.white, 0))
+
+// ~~ Tooltips {
+t1 ="PriceValue selects the method of price computation. \n\nSets the smoothing period for the PriceValue. \n\nAdjusting these settings will change the input values for the K-Nearest Neighbors algorithm, influencing how the trend is calculated."
+t2 = "TargetValue specifies the target to evaluate. \n\nSets the smoothing period for the TargetValue."
+t3 ="numberOfClosestValues sets the number of closest values that are considered when calculating the KNN Moving Average. Adjusting this number will affect the sensitivity of the trend line, with a higher value leading to a smoother line and a lower value resulting in a line that is more responsive to recent price changes."
+t4 ="smoothingPeriod sets the period for the moving average applied to the KNN classifier. Adjusting the smoothing period will affect how rapidly the trend line responds to price changes, with a larger smoothing period leading to a smoother line that may lag recent price movements, and a smaller smoothing period resulting in a line that more closely tracks recent changes."
+t5 ="This option controls the background color for the trend prediction. Enabling it will change the background color based on the prediction, providing visual cues on the direction of the trend. A green color indicates a positive prediction, while red indicates a negative prediction."
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Inputs {
+PriceValue   = input.string("hl2", options = ["hl2","VWAP", "sma", "wma", "ema", "hma"], group="", inline="Value")
+maLen        = input.int(5, minval=2, maxval=200, title="", group="", inline="Value", tooltip=t1)
+TargetValue  = input.string("Price Action", options = ["Price Action","VWAP", "Volatility", "sma", "wma", "ema", "hma"], group="", inline="Target")
+maLen_       = input.int(5, minval=2, maxval=200, title="", group="", inline="Target", tooltip=t2)
+// Input parameters for the KNN Moving Average
+numberOfClosestValues = input.int(3, "Number of Closest Values", 2, 200, tooltip=t3) 
+smoothingPeriod       = input.int(50, "Smoothing Period", 2, 500, tooltip=t4) 
+windowSize            = math.max(numberOfClosestValues, 30) 
+
+// knn Color
+Upknn_col   = input.color(color.lime, title="", group="KNN Color", inline="knn col")
+Dnknn_col   = input.color(color.red, title="", group="KNN Color", inline="knn col")
+Neuknn_col  = input.color(color.orange, title="", group="KNN Color", inline="knn col")
+// MA knn Color
+Maknn_col   = input.color(color.teal, title="", group="MA KNN Color", inline="MA knn col")
+// BG Color
+bgcolor = input.bool(false, title="Trend Prediction Color", group="BG Color", inline="bg", tooltip=t5)
+Up_col  = input.color(color.lime, title="", group="BG Color", inline="bg")
+Dn_col  = input.color(color.red, title="", group="BG Color", inline="bg")
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ kNN Classifier {
+value_in = switch PriceValue
+    "hl2"  => ta.sma(hl2,maLen)
+    "VWAP" => ta.vwap(close[maLen])
+    "sma" => ta.sma(close,maLen)
+    "wma" => ta.wma(close,maLen)
+    "ema" => ta.ema(close,maLen)
+    "hma" => ta.hma(close,maLen)
+
+meanOfKClosest(value_,target_) => 
+    closestDistances = array.new_float(numberOfClosestValues, 1e10) 
+    closestValues    = array.new_float(numberOfClosestValues, 0.0) 
+    for i = 1 to windowSize 
+        value = value_[i] 
+        distance = math.abs(target_ - value) 
+        maxDistIndex = 0 
+        maxDistValue = closestDistances.get(0) 
+        for j = 1 to numberOfClosestValues - 1 
+            if closestDistances.get(j) > maxDistValue
+                maxDistIndex := j
+                maxDistValue := closestDistances.get(j)
+        if distance < maxDistValue 
+            array.set(closestDistances, maxDistIndex, distance)
+            array.set(closestValues, maxDistIndex, value)
+    closestValues.sum() / numberOfClosestValues 
+
+// Choose the target input based on user selection
+target_in = switch TargetValue
+    "Price Action"  => ta.rma(close,maLen_) 
+    "VWAP"          => ta.vwap(close[maLen_])
+    "Volatility"    => ta.atr(14)
+    "sma" => ta.sma(close,maLen_)
+    "wma" => ta.wma(close,maLen_)
+    "ema" => ta.ema(close,maLen_)
+    "hma" => ta.hma(close,maLen_)
+
+knnMA = meanOfKClosest(value_in,target_in)
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ kNN Prediction {
+// Function to calculate KNN Classifier
+price = math.avg(knnMA, close)
+c     = ta.rma(knnMA[1], smoothingPeriod) 
+o     = ta.rma(knnMA, smoothingPeriod)
+
+// Defines KNN function to perform classification
+knn(price) => 
+    Pos_count = 0 
+    Neg_count = 0 
+    min_distance = 10e10 
+    nearest_index = 0 
+    for j = 1 to 10 
+        distance = math.sqrt(math.pow(price[j] - price, 2)) 
+        if distance < min_distance 
+            min_distance := distance
+            nearest_index := j
+            Neg = c[nearest_index] > o[nearest_index] 
+            Pos = c[nearest_index] < o[nearest_index] 
+            if Pos 
+                Pos_count += 1
+            if Neg 
+                Neg_count += 1
+    output = Pos_count>Neg_count?1:-1 
+
+// Calls KNN function and smooths the prediction
+knn_prediction_raw = knn(price) 
+knn_prediction     = ta.wma(knn_prediction_raw, 3)
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Plots {
+// Plots for display on the chart
+knnMA_          = ta.wma(knnMA,5)
+knnMA_col       = knnMA_>knnMA_[1]?Upknn_col:knnMA_<knnMA_[1]?Dnknn_col:Neuknn_col
+Classifier_Line = plot(knnMA_,"Knn Classifier Line", knnMA_col)
+MAknn_          = ta.rma(knnMA, smoothingPeriod)
+plot(MAknn_,"Average Knn Classifier Line" ,Maknn_col) 
+green = knn_prediction < 0.5
+red   = knn_prediction > -0.5 
+bgcolor( green and bgcolor? color.new(Dn_col,80) : 
+ red and bgcolor ? color.new(Up_col,80) : na) 
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}
+
+// ~~ Alerts {
+knnMA_cross_Over_Ma      = ta.crossover(knnMA_,MAknn_)
+knnMA_cross_Under_Ma     = ta.crossunder(knnMA_,MAknn_)
+knnMA_cross_Over_Close   = ta.crossover(knnMA_,close)
+knnMA_cross_Under_Close  = ta.crossunder(knnMA_,close)
+knnMA_Switch_Up          = knnMA_[1]<knnMA_ and knnMA_[1]<=knnMA_[2]
+knnMA_Switch_Dn          = knnMA_[1]>knnMA_ and knnMA_[1]>=knnMA_[2]
+knnMA_Neutral            = knnMA_col==Neuknn_col and knnMA_col[1]!=Neuknn_col
+greenBG                  = green and not green[1]
+redBG                    = red and not red[1]
+
+alertcondition(knnMA_cross_Over_Ma,  title = "Knn Crossover Average Knn",  message = "Knn Crossover Average Knn")
+alertcondition(knnMA_cross_Under_Ma, title = "Knn Crossunder Average Knn", message = "Knn Crossunder Average Knn")
+alertcondition(knnMA_cross_Over_Close,  title = "Knn Crossover Close",  message = "Knn Crossover Close")
+alertcondition(knnMA_cross_Under_Close, title = "Knn Crossunder Close", message = "Knn Crossunder Close")
+alertcondition(knnMA_Switch_Up,  title = "Knn Switch Up",  message = "Knn Switch Up")
+alertcondition(knnMA_Switch_Dn, title = "Knn Switch Dn", message = "Knn Switch Dn")
+alertcondition(knnMA_Neutral, title = "Knn is Neutral", message = "Knn is Neutral")
+alertcondition(greenBG, title = "Positive Prediction", message = "Positive Prediction")
+alertcondition(redBG, title = "Negative Prediction", message = "Negative Prediction")
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~}

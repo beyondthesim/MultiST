@@ -1,0 +1,749 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © keio1989
+
+//@version=5
+
+import dokang/POA/9 as POA
+
+strategy("Supertrend 3/5 TP", overlay=true, initial_capital=1000, process_orders_on_close=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.05)
+
+// BAR COLOR //
+
+color_1 = #e9f3ff
+color_2 = #bbd9fb
+color_3 = #5b9cf6
+color_4 = #1848cc
+color_5 = #0c3299
+color_6 = #ffe9ea 
+color_7 = #fccbcd
+color_8 = #faa1a4
+color_9 = #b33e48
+color_10 = #801922
+
+//CALC DATE ------------------------------------------------------------------------------------------------------------
+start_time   = input.time(defval = timestamp("31 Dec 2000 15:00 +0000"), title = "Start   ", inline="timestart", group='═════ TRADE SETTING')
+end_time     = input.time(defval = timestamp("31 Dec 2099 00:00 +0000"), title = "End  ", inline="timeend", group='═════ TRADE SETTING')
+
+timeCond     = (time > start_time) and (time < end_time)
+
+select_bot   = input.string('TVExtBot', 'Select Your Bot ', inline="bot", options=['PoA Bot', 'TVExtBot'])
+
+//POA BOT --------------------------------------------------------------------------------------------------------------
+password     = input.string(defval='password', title='Password ', inline="pw", group='POA Bot')
+in_trade     = POA.in_trade(start_time, end_time)
+
+active_long  = input.bool(true, "Activate Long", inline="activate")
+active_short = input.bool(true, "Activate Short", inline="activate")
+
+//SUPERTREND -----------------------------------------------------------------------------------------------------------
+supertrend_visible = input.bool(true, 'Trend Line & Fill ', group='═════ Super Trend')
+atrPeriod2         = input.int(14, 'Length ', inline='st6', group='Trail Time Frame')
+factor2            = input.float(5.4, 'Factor ', step = 0.1, inline='st6', group='Trail Time Frame')
+atrPeriod1         = input.int(14, 'Length ', inline='st4', group='High Time Frame')
+factor1            = input.float(5.4, 'Factor ', step = 0.1, inline='st4', group='High Time Frame')
+
+[supertrend1, direction1] = ta.supertrend(factor1, atrPeriod1)
+[supertrend2, direction2] = ta.supertrend(factor2, atrPeriod2)
+
+bodyMiddle  = plot((open + close) / 2, editable=false, display=display.none)
+
+upTrend     = plot(direction1 < 0 ? supertrend1 : na, "Up Trend", color=color_5, linewidth=2, style=plot.style_linebr, editable=false, display = supertrend_visible ? display.pane : display.none)
+downTrend   = plot(direction1 < 0 ? na : supertrend1, "Down Trend", color=color_10, linewidth=2, style=plot.style_linebr, editable=false, display = supertrend_visible ? display.pane : display.none)
+upTrend2    = plot(direction2 < 0 ? supertrend2 : na, "Up Trend", color=color_3, linewidth=1, style=plot.style_linebr, editable=false, display = supertrend_visible ? display.pane : display.none)
+downTrend2  = plot(direction2 < 0 ? na : supertrend2, "Down Trend", color=color_8, linewidth=1, style=plot.style_linebr, editable=false, display = supertrend_visible ? display.pane : display.none)
+
+fill(bodyMiddle, upTrend, color.new(color_5, 90), editable=false, display = supertrend_visible ? display.all : display.none)
+fill(bodyMiddle, downTrend, color.new(color_10, 90), editable=false, display = supertrend_visible ? display.all : display.none)
+fill(bodyMiddle, upTrend2, color.new(color_3, 90), editable=false, display = supertrend_visible ? display.all : display.none)
+fill(bodyMiddle, downTrend2, color.new(color_8, 90), editable=false, display = supertrend_visible ? display.all : display.none)
+
+rsi_filter_enable = input.bool(true)
+
+rsi_long_filter = input.int(75, minval=1, maxval=100)
+rsi_short_filter = input.int(25, minval=1, maxval=100)
+rsi_long_entry_cond = input.int(60, minval=1, maxval=100)
+rsi_short_entry_cond = input.int(40, minval=1, maxval=100)
+
+var bool long_rsi_cond = true
+var bool short_rsi_cond = true
+
+// 기존 RSI
+rsi_v = ta.rsi(close, 14)
+
+// RSI MA 길이 (필요하면 인풋으로 사용)
+rsi_ma_len = input.int(2, "RSI MA Length")
+
+// RSI MA 계산
+rsi_ma = ta.sma(rsi_v, rsi_ma_len)
+
+// long_rsi_cond, short_rsi_cond 는 위에서 var bool 로 선언되어 있다고 가정
+// var bool long_rsi_cond = true
+// var bool short_rsi_cond = true
+
+// 🔵 롱 필터: rsi_ma 기준으로 변경
+if rsi_ma >= rsi_long_filter and rsi_filter_enable
+    long_rsi_cond := false
+if long_rsi_cond == false and rsi_ma <= rsi_long_entry_cond and rsi_filter_enable
+    long_rsi_cond := true
+
+// 🔴 숏 필터: rsi_ma 기준으로 변경
+if rsi_ma <= rsi_short_filter and rsi_filter_enable
+    short_rsi_cond := false
+if short_rsi_cond == false and rsi_ma >= rsi_short_entry_cond and rsi_filter_enable
+    short_rsi_cond := true
+
+
+//VOLUME ---------------------------------------------------------------------------------------------------------------
+bcolor_enabled     = input.bool(true, 'Colored Bar ', group='═════ Volume', inline='bar')
+
+length             = input.int(20, 'Volume MA Length ', inline='vol', group='═════ Volume')
+avrg               = ta.sma(volume, length)
+
+thresholdExtraHigh = input.float(5, 'High  ', inline='vol1', group='═════ Volume')
+thresholdHigh      = input(2.5, 'Medium ', inline='vol1', group='═════ Volume')
+thresholdMedium    = input.float(1, 'Normal ', inline='vol2', group='═════ Volume')
+thresholdNormal    = input(0.5, 'Low     ', inline='vol2', group='═════ Volume')
+
+vol1 = volume > avrg * thresholdExtraHigh
+vol2 = volume >= avrg * thresholdHigh and volume <= avrg * thresholdExtraHigh
+vol3 = volume >= avrg * thresholdMedium and volume <= avrg * thresholdHigh
+vol4 = volume >= avrg * thresholdNormal and volume <= avrg * thresholdMedium
+vol5 = volume < avrg * thresholdNormal
+
+color_bar = direction1 < 0 and vol1 ? color_5 : direction1 < 0 and vol2 ? color_4 : direction1 < 0 and vol3 ? color_3 : direction1 < 0 and vol4 ? color_2 : direction1 < 0 and vol5 ? color_1 : vol1 ? color_10 : vol2 ? color_9 : vol3 ? color_8 : vol4 ? color_7 : vol5 ? color_6 : na
+
+plotcandle(open, high, low, close, color= bcolor_enabled ? color_bar : na, bordercolor=color.new(#2a2e39, 0), wickcolor=color.new(#2a2e39, 0))
+
+//VOLATILITY -----------------------------------------------------------------------------------------------------------
+volatilityFilterInput = input.bool(true,title="StdDev ", group = "═════ Volatility ", inline="Vol")
+volatilityFilterStDevLength = input(10,title="",group = "═════ Volatility ", inline="Vol")
+volatilityStDevMaLength = input(20,title="> MA",group = "═════ Volatility ", inline="Vol")
+
+stdDevClose = ta.stdev(close, volatilityFilterStDevLength)
+volatilityCondition = volatilityFilterInput ? stdDevClose > ta.sma(stdDevClose,volatilityStDevMaLength) : true
+
+//RSI ------------------------------------------------------------------------------------------------------------------
+ma(source, length, type) =>
+    switch type
+        "SMA" => ta.sma(source, length)
+        "Bollinger Bands" => ta.sma(source, length)
+        "EMA" => ta.ema(source, length)
+        "SMMA (RMA)" => ta.rma(source, length)
+        "WMA" => ta.wma(source, length)
+        "VWMA" => ta.vwma(source, length)
+
+rsiSourceInput = close
+maTypeInput    = "SMA"
+rsiLengthInput = input.int(14, "Length ", inline="rsi", group='═════ RSI')
+maLengthInput  = input.int(14, "MA Length ", inline="rsi", group='═════ RSI')
+rsiUpperBand   = input.int(70, "RSI Upper band ", group='═════ RSI')
+rsiLowerBand   = input.int(30, "RSI Lower band ", group='═════ RSI')
+
+active_rsi_long_close  = input.bool(false, "", inline="rsilong", group="═════ RSI")
+active_rsi_short_close = input.bool(false, "", inline="rsishort", group="═════ RSI")
+
+long_rsi_size  = input.float(10, "RSI Long Close Size %", step = 0.1, inline="rsilong", group="═════ RSI")
+short_rsi_size = input.float(10, "RSI Short Close Size %", step = 0.1, inline="rsishort", group="═════ RSI")
+
+rsiup   = ta.rma(math.max(ta.change(rsiSourceInput), 0), rsiLengthInput)
+rsidown = ta.rma(-math.min(ta.change(rsiSourceInput), 0), rsiLengthInput)
+rsi     = rsidown == 0 ? 100 : rsiup == 0 ? 0 : 100 - (100 / (1 + rsiup / rsidown))
+rsiMA   = ma(rsi, maLengthInput, maTypeInput)
+
+rsi_buy_signal = rsi < rsiLowerBand and ta.crossover(rsi, rsiMA) and volatilityCondition
+rsi_sell_signal = rsi > rsiUpperBand and ta.crossunder(rsi, rsiMA) and volatilityCondition
+
+//STOCH RSI ------------------------------------------------------------------------------------------------------------
+stochsrc = input(close, title="Stoch RSI Source ", group="═════ Stoch RSI")
+smoothK  = input.int(3, "K ", minval=1, inline="rsi1", group="═════ Stoch RSI")
+smoothD  = input.int(3, "D ", minval=1, inline="rsi1", group="═════ Stoch RSI")
+lengthRSI   = input.int(14, "RSI Length ", minval=1, inline="rsi2", group="═════ Stoch RSI")
+lengthStoch = input.int(14, "Stoch Length ", minval=1, inline="rsi2", group="═════ Stoch RSI")
+stochrsiUpperBand = input.int(80, "Stoch RSI Upper band ", group='═════ Stoch RSI')
+stochrsiLowerBand = input.int(20, "Stoch RSI Lower band ", group='═════ Stoch RSI')
+
+active_stoch_long_close  = input.bool(false, "", inline="rsilong", group="═════ Stoch RSI")
+active_stoch_short_close = input.bool(false, "", inline="rsishort", group="═════ Stoch RSI")
+
+long_stoch_size  = input.float(5, "Stoch Long Close Size %", step = 0.1, inline="rsilong", group="═════ Stoch RSI")
+short_stoch_size = input.float(5, "Stoch Short Close Size %", step = 0.1, inline="rsishort", group="═════ Stoch RSI")
+
+rsi1 = ta.rsi(stochsrc, lengthRSI)
+k    = ta.sma(ta.stoch(rsi1, rsi1, rsi1, lengthStoch), smoothK)
+d    = ta.sma(k, smoothD)
+
+co   = ta.crossover(k,d)
+cu   = ta.crossunder(k,d)
+
+stoch_long_close  = cu and k > stochrsiUpperBand and volatilityCondition
+stoch_short_close = co and k < stochrsiLowerBand and volatilityCondition
+
+//BOLLINGER BANDS  -----------------------------------------------------------------------------------------------------
+visible_bb    = input.bool(false, "Visble Bollinger Bands", group="═════ Bollinger Bands")
+
+active_bb_atr = input.bool(false, "Use Bollinger Bands Trail", group="═════ Bollinger Bands")
+active_bb_long_close  = input.bool(false, "", inline="bb1", group="═════ Bollinger Bands")
+active_bb_short_close = input.bool(false, "", inline="bb2", group="═════ Bollinger Bands")
+long_bb_size  = input.float(5, "Long BB Close Size %", step = 0.1, inline="bb1", group="═════ Bollinger Bands")
+short_bb_size = input.float(10, "Short BB Close Size %", step = 0.1, inline="bb2", group="═════ Bollinger Bands")
+
+bbsrc    = input(close, title="Source ", group="═════ Bollinger Bands")
+bblength = input.int(20, minval=1, title="BB Length ", group="═════ Bollinger Bands")
+mult     = input.float(2.0, minval=0.001, maxval=50, title="Deviation ", group="═════ Bollinger Bands")
+basis    = ta.sma(bbsrc, bblength)
+dev      = mult * ta.stdev(bbsrc, bblength)
+upper    = basis + dev
+lower    = basis - dev
+plot(visible_bb ? basis : na, "BB Basis ", color=#FF6D00)
+p1       = plot(visible_bb ? upper : na, "BB Upper ", color=direction1 < 0 ? color_2 : color_7)
+p2       = plot(visible_bb ? lower : na, "BB Lower ", color=direction1 < 0 ? color_2 : color_7)
+fill(p1, p2, title = "BB Background ", color=direction1 < 0 ? color.new(color_4, 90):  color.new(color_9, 90), editable=false, display=visible_bb ? display.all : display.none)
+
+bb_buy_signal  = ta.crossunder(close, lower) and volatilityCondition
+bb_sell_signal = ta.crossover(close, upper) and volatilityCondition
+
+//LONG TP/SL -----------------------------------------------------------------------------------------------------------
+ltp1Open   = input.bool(true, "", inline="longtp1", group = "═════ Long TP / SL")
+ltp1       = input.float(3, "Long TP-1", step = 0.1, inline="longtp1", group = "═════ Long TP / SL") / 100
+ltp1Amount = input.int(50, " Amount", step = 1, inline="longtp1", group = "═════ Long TP / SL")
+
+ltp2Open   = input.bool(true, "", inline="longtp2", group = "═════ Long TP / SL")
+ltp2       = input.float(5, "Long TP-2", step = 0.1, inline="longtp2", group = "═════ Long TP / SL") / 100
+ltp2Amount = input.int(100, " Amount", step = 1, inline="longtp2", group = "═════ Long TP / SL")
+
+ltp3Open   = input.bool(true, "", inline="longtp3", group = "═════ Long TP / SL")
+ltp3       = input.float(5, "Long TP-3", step = 0.1, inline="longtp3", group = "═════ Long TP / SL") / 100
+ltp3Amount = input.int(20, "Amount", step = 1, inline="longtp3", group = "═════ Long TP / SL")
+
+ltp4Open   = input.bool(true, "", inline="longtp4", group = "═════ Long TP / SL")
+ltp4       = input.float(8, "Long TP-4", step = 0.1, inline="longtp4", group = "═════ Long TP / SL") / 100
+ltp4Amount = input.int(25, "Amount", step = 1, inline="longtp4", group = "═════ Long TP / SL")
+
+ltp5Open   = input.bool(true, "", inline="longtp5", group = "═════ Long TP / SL")
+ltp5       = input.float(12, "Long TP-5", step = 0.1, inline="longtp5", group = "═════ Long TP / SL") / 100
+ltp5Amount = input.int(30, "Amount", step = 1, inline="longtp5", group = "═════ Long TP / SL")
+
+ltp6Open   = input.bool(true, "", inline="longtp6", group = "═════ Long TP / SL")
+ltp6       = input.float(16, "Long TP-6", step = 0.1, inline="longtp6", group = "═════ Long TP / SL") / 100
+ltp6Amount = input.int(100, "Amount", step = 1, inline="longtp6", group = "═════ Long TP / SL")
+
+ltp7Open   = input.bool(false, "", inline="longtp7", group = "═════ Long TP / SL")
+ltp7       = input.float(25, "Long TP-7", step = 0.1, inline="longtp7", group = "═════ Long TP / SL") / 100
+ltp7Amount = input.int(10, "Amount", step = 1, inline="longtp7", group = "═════ Long TP / SL")
+
+ltp8Open   = input.bool(false, "", inline="longtp8", group = "═════ Long TP / SL")
+ltp8       = input.float(30, "Long TP-8", step = 0.1, inline="longtp8", group = "═════ Long TP / SL") / 100
+ltp8Amount = input.int(10, "Amount", step = 1, inline="longtp8", group = "═════ Long TP / SL")
+
+ltp9Open   = input.bool(false, "", inline="longtp9", group = "═════ Long TP / SL")
+ltp9       = input.float(40, "Long TP-9", step = 0.1, inline="longtp9", group = "═════ Long TP / SL") / 100
+ltp9Amount = input.int(10, "Amount", step = 1, inline="longtp9", group = "═════ Long TP / SL")
+
+lslOpen    = input.bool(true, "", inline="longlsl", group = "═════ Long TP / SL")
+lsl        = input.float(3, "Long Stop Loss", step = 0.1, inline="longlsl", group = "═════ Long TP / SL")/ 100
+long_sl    = strategy.position_avg_price * (1 - lsl)
+
+//SHORT TP/SL ----------------------------------------------------------------------------------------------------------
+stp1Open   = input.bool(true, "", inline="shorttp1", group = "═════ Short TP / SL")
+stp1       = input.float(3, "Short TP-1", step = 0.1, inline="shorttp1", group = "═════ Short TP / SL") / 100
+stp1Amount = input.int(50, "Amount", step = 1, inline="shorttp1", group = "═════ Short TP / SL")
+
+stp2Open   = input.bool(true, "", inline="shorttp2", group = "═════ Short TP / SL")
+stp2       = input.float(5, "Short TP-2", step = 0.1, inline="shorttp2", group = "═════ Short TP / SL") / 100
+stp2Amount = input.int(100, "Amount", step = 1, inline="shorttp2", group = "═════ Short TP / SL")
+
+stp3Open   = input.bool(true, "", inline="shorttp3", group = "═════ Short TP / SL")
+stp3       = input.float(4, "Short TP-3", step = 0.1, inline="shorttp3", group = "═════ Short TP / SL") / 100
+stp3Amount = input.int(20, "Amount", step = 1, inline="shorttp3", group = "═════ Short TP / SL")
+
+stp4Open   = input.bool(true, "", inline="shorttp4", group = "═════ Short TP / SL")
+stp4       = input.float(7, "Short TP-4", step = 0.1, inline="shorttp4", group = "═════ Short TP / SL") / 100
+stp4Amount = input.int(25, "Amount", step = 1, inline="shorttp4", group = "═════ Short TP / SL")
+
+stp5Open   = input.bool(true, "", inline="shorttp5", group = "═════ Short TP / SL")
+stp5       = input.float(10, "Short TP-5", step = 0.1, inline="shorttp5", group = "═════ Short TP / SL") / 100
+stp5Amount = input.int(30, "Amount", step = 1, inline="shorttp5", group = "═════ Short TP / SL")
+
+stp6Open   = input.bool(true, "", inline="shorttp6", group = "═════ Short TP / SL")
+stp6       = input.float(13, "Short TP-6", step = 0.1, inline="shorttp6", group = "═════ Short TP / SL") / 100
+stp6Amount = input.int(100, "Amount", step = 1, inline="shorttp6", group = "═════ Short TP / SL")
+
+stp7Open   = input.bool(false, "", inline="shorttp7", group = "═════ Short TP / SL")
+stp7       = input.float(20, "Short TP-7", step = 0.1, inline="shorttp7", group = "═════ Short TP / SL") / 100
+stp7Amount = input.int(10, "Amount", step = 1, inline="shorttp7", group = "═════ Short TP / SL")
+
+stp8Open   = input.bool(false, "", inline="shorttp8", group = "═════ Short TP / SL")
+stp8       = input.float(25, "Short TP-8", step = 0.1, inline="shorttp8", group = "═════ Short TP / SL") / 100
+stp8Amount = input.int(10, "Amount", step = 1, inline="shorttp8", group = "═════ Short TP / SL")
+
+stp9Open   = input.bool(false, "", inline="shorttp9", group = "═════ Short TP / SL")
+stp9       = input.float(30, "Short TP-9", step = 0.1, inline="shorttp9", group = "═════ Short TP / SL") / 100
+stp9Amount = input.int(10, "Amount", step = 1, inline="shorttp9", group = "═════ Short TP / SL")
+
+sslOpen    = input.bool(true, "", inline="shortssl", group = "═════ Short TP / SL")
+ssl        = input.float(3, "Short Stop Loss", step = 0.1, inline="shortssl", group = "═════ Short TP / SL") / 100
+short_sl   = strategy.position_avg_price * (1 + ssl)
+
+last_entry_price = strategy.opentrades.entry_price(strategy.opentrades - 1)
+
+
+//#################################//#################################//#################################//#################################
+
+
+// === [1] 볼린저밴드 기본 설정 ===
+g_length = input.int(50, title="BB 기간")
+g_src = close
+g_mult = input.float(2.0, title="표준편차 계수")
+
+g_basis = ta.sma(g_src, g_length)
+g_dev = g_mult * ta.stdev(g_src, g_length)
+g_upper = g_basis + g_dev
+g_lower = g_basis - g_dev
+
+// === [2] 기울기 계산 ===
+g_slope = g_basis - g_basis[1]  // 1틱 전과의 차이
+g_slope_pct = g_slope / g_basis[1] * 100  // 퍼센트 기울기
+
+// === [3] 기울기 기준 횡보 필터 ===
+g_threshold = input.float(0.06, title="기울기 임계값 (%)", step=0.01)  // 0.05% 이상이면 활동성
+g_is_active = math.abs(g_slope_pct) > g_threshold
+
+// === [4] 시각화 ===
+// 캔들 배경에 횡보 영역 표시
+bgcolor(not g_is_active ? color.new(color.gray, 85) : na, title="횡보 영역")
+
+// basis 라인 색상으로도 구분
+g_basis_color = g_is_active ? color.green : color.red
+plot(g_basis, title="BB Basis (중단선)", color=g_basis_color, linewidth=2)
+
+// 볼린저밴드 상/하단 표시 (옵션)
+g_show_bands = input.bool(true, title="밴드 상하단 보기")
+plot(g_show_bands ? g_upper : na, title="Upper", color=color.teal)
+plot(g_show_bands ? g_lower : na, title="Lower", color=color.teal)
+
+// 기울기 퍼센트 수치 라벨 (옵션)
+g_show_labels = input.bool(false, title="기울기 퍼센트 라벨")
+plotshape(g_show_labels and not g_is_active, title="횡보", location=location.belowbar, style=shape.xcross, color=color.gray, size=size.tiny)
+plotshape(g_show_labels and g_is_active, title="활동", location=location.abovebar, style=shape.triangleup, color=color.green, size=size.tiny)
+
+// 진입 필터: 캔들 꼬리 비율 제한
+grad_filter = input.bool(true, "기울기 필터 활성화")
+
+var bool grad_filter_ok = true
+
+if grad_filter
+    if g_is_active
+        grad_filter_ok := true
+    else
+        grad_filter_ok := false
+else
+    grad_filter_ok := true
+
+// === Input Parameters ===
+ema1_len = input.int(5, title="EMA 1")
+ema2_len = input.int(25, title="EMA 2")
+ema3_len = input.int(70, title="EMA 3")
+ema4_len = input.int(120, title="EMA 4")
+
+sideways_threshold_pct = input.float(1.5, title="Sideways Max % Price Change", tooltip="Threshold for sideways market detection based on price range (%)")
+sideways_lookback = input.int(20, title="Sideways Lookback Period")
+
+// === EMA Calculations ===
+ema1 = ta.ema(close, ema1_len)
+ema2 = ta.ema(close, ema2_len)
+ema3 = ta.ema(close, ema3_len)
+ema4 = ta.ema(close, ema4_len)
+
+// === Price Range for Sideways Detection ===
+high_range = ta.highest(high, sideways_lookback)
+low_range = ta.lowest(low, sideways_lookback)
+range_pct = 100 * (high_range - low_range) / close
+
+// === Trend Conditions ===
+is_uptrend = close > ema1 and ema1 > ema2 and ema2 > ema3 and ema3 > ema4
+is_downtrend = close < ema1 and ema1 < ema2 and ema2 < ema3 and ema3 < ema4
+is_sideways = range_pct < sideways_threshold_pct and not is_uptrend and not is_downtrend
+
+// === Trend Classification ===
+trend = is_uptrend ? "Uptrend" : is_downtrend ? "Downtrend" : is_sideways ? "Sideways" : "Unknown"
+
+var int final_trend = na
+if is_uptrend
+    final_trend := 1
+if is_downtrend
+    final_trend := -1
+if is_sideways
+    final_trend := 0 
+
+// === Color and Labels ===
+bgcolor(is_uptrend ? color.new(color.green, 85) : is_downtrend ? color.new(color.red, 85) : is_sideways ? color.new(color.gray, 85) : na)
+
+//plotshape(is_uptrend, location=location.top, style=shape.labelup, color=color.green, text="Up", size=size.tiny)
+//plotshape(is_downtrend, location=location.bottom, style=shape.labeldown, color=color.red, text="Down", size=size.tiny)
+//plotshape(is_sideways, location=location.top, style=shape.labelup, color=color.gray, text="Side", size=size.tiny)
+
+// === Debug / Display ===
+plot(ema1, color=color.orange)
+plot(ema2, color=color.blue)
+plot(ema3, color=color.purple)
+plot(ema4, color=color.gray)
+//#################################//#################################//#################################//#################################
+
+longentrycond1   = active_bb_atr ? in_trade and active_long and direction1 < 0 and direction2 < 0 and close > basis : in_trade and active_long and direction1 < 0 and direction2 < 0 and long_rsi_cond and grad_filter_ok//final_trend==1
+longentrycond2   = in_trade and active_short and sslOpen and strategy.position_size < 0 and close > strategy.position_avg_price * (1 + ssl) and grad_filter_ok//final_trend==1
+
+shortentrycond1  = active_bb_atr ? in_trade and active_short and direction1 > 0 and direction2 > 0 and close < basis : in_trade and active_short and direction1 > 0 and direction2 > 0 and short_rsi_cond and grad_filter_ok//final_trend==-1
+shortentrycond2  = in_trade and active_long and lslOpen and strategy.position_size > 0 and close < strategy.position_avg_price * (1 - lsl) and grad_filter_ok//final_trend==-1
+
+longclosecond1   = active_bb_atr ? in_trade and direction1 > 0 or in_trade and direction2 > 0 or in_trade and bb_buy_signal : in_trade and direction1 > 0 or in_trade and direction2 > 0 //and final_trend==-1
+longclosecond2   = in_trade and lslOpen and strategy.position_size > 0 and close < strategy.position_avg_price * (1 - lsl)// and final_trend==-1
+
+shortclosecond1  = active_bb_atr ? in_trade and direction1 < 0 or in_trade and direction2 < 0 or in_trade and bb_sell_signal : in_trade and direction1 < 0 or in_trade and direction2 < 0 //and final_trend==1
+shortclosecond2  = in_trade and sslOpen and strategy.position_size < 0 and close > strategy.position_avg_price * (1 + ssl)// and final_trend==1
+
+
+
+//TVEXTBOT -------------------------------------------------------------------------------------------------------------
+
+var string okxlongentry = na
+var string okxshortentry = na
+var string okxlongexit = na
+var string okxshortexit = na
+
+ticker_symbol = array.get(str.split(syminfo.ticker, "USDT")[0], 0)
+
+tvext_entryperc = input.float(10)
+tvext_leverage = input.int(20)
+
+
+var string tvextbot_long_entry = na
+var string tvextbot_long_exit = na
+var string tvextbot_long_exit_5perc = na
+var string tvextbot_long_exit_10perc = na
+var string tvextbot_long_exit1 = na
+var string tvextbot_long_exit2 = na
+var string tvextbot_long_exit3 = na
+var string tvextbot_long_exit4 = na
+var string tvextbot_long_exit5 = na
+var string tvextbot_long_exit6 = na
+var string tvextbot_long_close = na
+
+var string tvextbot_short_entry = na
+var string tvextbot_short_exit = na
+var string tvextbot_short_exit_5perc = na
+var string tvextbot_short_exit_10perc = na
+var string tvextbot_short_exit1 = na
+var string tvextbot_short_exit2 = na
+var string tvextbot_short_exit3 = na
+var string tvextbot_short_exit4 = na
+var string tvextbot_short_exit5 = na
+var string tvextbot_short_exit6 = na
+var string tvextbot_short_close = na
+
+market = input.string("okx", 'market', options=["binance", "okx"])
+
+if market == "binance"
+    tvextbot_long_entry := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":"' + str.tostring(tvext_entryperc) + '","equity":"n","position_close":true,"leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit_5perc := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"5","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit_10perc := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"10","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit1 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp1Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit2 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp2Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit3 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp3Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit4 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp4Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit5 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp5Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit6 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp6Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_close := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+
+    tvextbot_short_entry := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":"' + str.tostring(tvext_entryperc) + '","equity":"n","position_close":true,"leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit_5perc := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"5","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit_10perc := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"10","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit1 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp1Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit2 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp2Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit3 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp3Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit4 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp4Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit5 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp5Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit6 := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp6Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_close := 'TVM:{"exchange":"binance-futures","account":"bot3","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+if market == "okx"
+    tvextbot_long_entry := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy","bal_pct":"' + str.tostring(tvext_entryperc) + '","equity":"n","position_close":true,"leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit_5perc := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"5","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit_10perc := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"10","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit1 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp1Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit2 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp2Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit3 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp3Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit4 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp4Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit5 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp5Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_exit6 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"' + str.tostring(ltp6Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_long_close := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"buy_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+
+    tvextbot_short_entry := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell","bal_pct":"' + str.tostring(tvext_entryperc) + '","equity":"n","position_close":true,"leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit_5perc := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"5","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit_10perc := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"10","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit1 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp1Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit2 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp2Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit3 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp3Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit4 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp4Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit5 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp5Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_exit6 := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"' + str.tostring(stp6Amount) + '","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+    tvextbot_short_close := 'TVM:{"exchange":"okx","account":"0907ttkJ!","symbol":"' + str.tostring(ticker_symbol) + '/USDT","type":"market","side":"sell_close","bal_pct":"100","leverage":' + str.tostring(tvext_leverage) + ',"margin_type":"cross","token":""}:MVT'
+
+//ALERT MESSAGE --------------------------------------------------------------------------------------------------------
+long_entry_message(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.entry_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_entry : na
+long_exit_message(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit : na
+long_exit_message_5perc(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit_5perc : na
+long_exit_message_10perc(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit_10perc : na
+long_exit_message1(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit1 : na
+long_exit_message2(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit2 : na
+long_exit_message3(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit3 : na
+long_exit_message4(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit4 : na
+long_exit_message5(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit5 : na
+long_exit_message6(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_exit6 : na
+long_close_message(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.close_message(password) : user_input_style == 'TVExtBot' ? tvextbot_long_close : na
+
+short_entry_message(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.entry_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_entry : na
+short_exit_message(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit : na
+short_exit_message_5perc(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit_5perc : na
+short_exit_message_10perc(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit_10perc : na
+short_exit_message1(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit1 : na
+short_exit_message2(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit2 : na
+short_exit_message3(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit3 : na
+short_exit_message4(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit4 : na
+short_exit_message5(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit5 : na
+short_exit_message6(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.exit_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_exit6 : na
+short_close_message(user_input_style) =>
+    user_input_style == 'PoA Bot' ? POA.close_message(password) : user_input_style == 'TVExtBot' ? tvextbot_short_close : na
+
+//Long Entry
+if longentrycond1
+    strategy.entry("LONG", strategy.long, alert_message=long_entry_message(select_bot))
+if longclosecond1 or longclosecond2
+    strategy.close("LONG", "close Long", alert_message=long_close_message(select_bot))
+//Short Entry
+if shortentrycond1
+    strategy.entry("SHORT", strategy.short, alert_message=short_entry_message(select_bot))
+if shortclosecond1 or shortclosecond2
+    strategy.close("SHORT", "close Short", alert_message=short_close_message(select_bot))
+
+//RSI Close
+if active_rsi_long_close and rsi_sell_signal and last_entry_price < close
+    strategy.close("LONG", "RSI Exit", qty_percent=long_rsi_size, alert_message=long_exit_message_10perc(select_bot))
+if active_rsi_short_close and rsi_buy_signal and last_entry_price > close
+    strategy.close("SHORT", "RSI Exit", qty_percent=short_rsi_size, alert_message=short_exit_message_10perc(select_bot))
+//Stoch RSI Close
+if active_stoch_long_close and stoch_long_close and last_entry_price < close
+    strategy.close("LONG", "Stoch Exit", qty_percent=long_stoch_size, alert_message=long_exit_message(select_bot))
+if active_stoch_short_close and stoch_short_close and last_entry_price > close
+    strategy.close("SHORT", "Stoch Exit", qty_percent=short_stoch_size, alert_message=short_exit_message(select_bot))
+//BB Close
+if active_bb_long_close and bb_sell_signal and last_entry_price < close
+    strategy.close("LONG", "BB Exit", qty_percent=long_bb_size, alert_message=long_exit_message_5perc(select_bot))
+if active_bb_short_close and bb_buy_signal and last_entry_price > close
+    strategy.close("SHORT", "BB Exit", qty_percent=short_bb_size, alert_message=short_exit_message_10perc(select_bot))
+
+// Long TP
+if (ltp1Open) and strategy.position_size > 0
+    strategy.exit("TP-1", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp1), qty_percent=ltp1Amount, alert_message=long_exit_message1(select_bot))
+if (ltp2Open) and strategy.position_size > 0
+    strategy.exit("TP-2", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp2), qty_percent=ltp2Amount, alert_message=long_exit_message2(select_bot))    
+if (ltp3Open) and strategy.position_size > 0    
+    strategy.exit("TP-3", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp3), qty_percent=ltp3Amount, alert_message=long_exit_message3(select_bot))
+if (ltp4Open) and strategy.position_size > 0
+    strategy.exit("TP-4", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp4), qty_percent=ltp4Amount, alert_message=long_exit_message4(select_bot))
+if (ltp5Open) and strategy.position_size > 0    
+    strategy.exit("TP-5", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp5), qty_percent=ltp5Amount, alert_message=long_exit_message5(select_bot))
+if (ltp6Open) and strategy.position_size > 0    
+    strategy.exit("TP-6", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp6), qty_percent=ltp6Amount, alert_message=long_exit_message6(select_bot))
+if (ltp7Open) and strategy.position_size > 0    
+    strategy.exit("TP-7", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp7), qty_percent=ltp7Amount, alert_message=long_exit_message(select_bot))
+if (ltp8Open) and strategy.position_size > 0    
+    strategy.exit("TP-8", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp8), qty_percent=ltp8Amount, alert_message=long_exit_message(select_bot))
+if (ltp9Open) and strategy.position_size > 0    
+    strategy.exit("TP-9", from_entry="LONG", limit=strategy.position_avg_price * (1 + ltp9), qty_percent=ltp9Amount, alert_message=long_exit_message(select_bot))
+// Short TP
+if (stp1Open) and strategy.position_size < 0
+    strategy.exit("TP-1", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp1), qty_percent=stp1Amount, alert_message=short_exit_message1(select_bot))
+if (stp2Open) and strategy.position_size < 0
+    strategy.exit("TP-2", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp2), qty_percent=stp2Amount, alert_message=short_exit_message2(select_bot))
+if (stp3Open) and strategy.position_size < 0
+    strategy.exit("TP-3", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp3), qty_percent=stp3Amount, alert_message=short_exit_message3(select_bot))
+if (stp4Open) and strategy.position_size < 0
+    strategy.exit("TP-4", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp4), qty_percent=stp4Amount, alert_message=short_exit_message4(select_bot))
+if (stp5Open) and strategy.position_size < 0
+    strategy.exit("TP-5", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp5), qty_percent=stp5Amount, alert_message=short_exit_message5(select_bot))
+if (stp6Open) and strategy.position_size < 0
+    strategy.exit("TP-6", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp6), qty_percent=stp6Amount, alert_message=short_exit_message6(select_bot))
+if (stp7Open) and strategy.position_size < 0
+    strategy.exit("TP-7", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp7), qty_percent=stp7Amount, alert_message=short_exit_message(select_bot))
+if (stp8Open) and strategy.position_size < 0
+    strategy.exit("TP-8", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp8), qty_percent=stp8Amount, alert_message=short_exit_message(select_bot))
+if (stp9Open) and strategy.position_size < 0
+    strategy.exit("TP-9", from_entry="SHORT", limit=strategy.position_avg_price * (1 - stp9), qty_percent=stp9Amount, alert_message=short_exit_message(select_bot))
+
+//Table
+
+PnL     = strategy.grossprofit - strategy.grossloss
+ex_PnL  = math.round(strategy.openprofit, 1)
+
+totalbalance  = strategy.initial_capital + strategy.netprofit
+
+used_equity   = math.round(strategy.position_avg_price * strategy.position_size)
+ratio_equity  = strategy.position_size > 0 ? math.round(used_equity / totalbalance * 100, 1) : 0
+
+mdd     = strategy.opentrades.max_drawdown(strategy.opentrades - 1)
+
+totalTrades   = strategy.closedtrades
+winningTrades = na(totalTrades) ? na : totalTrades - strategy.losstrades
+
+winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0
+
+profitFactor  = math.abs(strategy.grossprofit) > 0 ? strategy.grossprofit / math.abs(strategy.grossloss) : na
+
+avgBarsPerTrade() =>
+    sumBarsPerTrade = 0
+    for tradeNo = 0 to strategy.closedtrades - 1
+        // Loop through all closed trades, starting with the oldest.
+        sumBarsPerTrade += strategy.closedtrades.exit_bar_index(tradeNo) - strategy.closedtrades.entry_bar_index(tradeNo) + 1
+    result = nz(sumBarsPerTrade / strategy.closedtrades)
+
+//TABLE ----------------------------------------------------------------------------------------------------------------
+show_status           = input.bool(true,'', group='Status Table', inline='t1')
+status_text_size      = input.string(size.tiny, 'Size ', options=[size.tiny, size.small, size.normal], group='Status Table', inline='t1')
+status_table_position = input.string(position.bottom_left, 'Position ', options=[position.bottom_left, position.bottom_right, position.bottom_center, position.top_left, position.top_right, position.top_center], group='Status Table', inline='t1')
+
+show_performance           = input.bool(true, '', group='Profit Table', inline='t2')
+performance_text_size      = input.string(size.small, 'Size ', options=[size.tiny, size.small, size.normal], group='Profit Table', inline='t2')
+performance_table_position = input.string(position.bottom_right, 'Position ', options=[position.bottom_left, position.bottom_right, position.bottom_center, position.top_left, position.top_right, position.top_center], group='Profit Table', inline='t2')
+
+// ------------------------------------------------------------------------------------------------------------------ //
+
+profit_color1 = PnL > 0 ? color.lime : color.red
+profit_color2 = strategy.openprofit < 0 ? color.red : color.lime
+
+var Table = table.new(status_table_position, columns=10, rows=20, border_width=1, bgcolor=color.black, border_color=color.gray)
+
+if show_status
+    table.cell(table_id=Table, column=0, row=0, text='Position Size', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=0, row=1, text=str.tostring(strategy.position_size), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=0, row=2, text='Avg Price', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=0, row=3, text=str.tostring(math.round_to_mintick(strategy.position_avg_price)), text_size=status_text_size, text_color=color.green)
+
+    table.cell(table_id=Table, column=1, row=0, text='Unrealized PnL', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=1, row=1, text=str.tostring(math.round(strategy.openprofit, 1)) + ' ' + syminfo.currency, text_size=status_text_size, text_color=profit_color2)
+    table.cell(table_id=Table, column=1, row=2, text_color=color.gray, text_size=status_text_size, text='Net profit')
+    table.cell(table_id=Table, column=1, row=3, text=str.tostring(math.round(PnL, 1)) + ' ' + syminfo.currency, text_size=status_text_size, text_color=profit_color1)
+
+    table.cell(table_id=Table, column=2, row=0, text='Win Rate', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=2, row=1, text=str.tostring(math.round(winRate, 1)), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=2, row=2, text='Profit Factor', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=2, row=3, text=str.tostring(math.round(profitFactor, 2)), text_size=status_text_size, text_color=color.olive)
+
+    table.cell(table_id=Table, column=4, row=0, text='Max Drawdown', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=4, row=1, text=str.tostring(math.round(mdd, 1)), text_size=status_text_size, text_color=color.green)
+    table.cell(table_id=Table, column=4, row=2, text='Bars Per Trade', text_size=status_text_size, text_color=color.gray)
+    table.cell(table_id=Table, column=4, row=3, text=str.tostring(int(avgBarsPerTrade())), text_size=status_text_size, text_color=color.olive)
+
+if show_performance
+    new_month = month(time) != month(time[1])
+    new_year  = year(time)  != year(time[1])
+    
+    eq = strategy.initial_capital + strategy.netprofit
+    
+    bar_pnl = eq / eq[1] - 1
+    
+    cur_month_pnl = 0.0
+    cur_year_pnl  = 0.0
+    
+    // Current Monthly P&L
+    cur_month_pnl := new_month ? 0.0 : 
+                     (1 + cur_month_pnl[1]) * (1 + bar_pnl) - 1 
+    
+    // Current Yearly P&L
+    cur_year_pnl := new_year ? 0.0 : 
+                     (1 + cur_year_pnl[1]) * (1 + bar_pnl) - 1  
+    
+    // Arrays to store Yearly and Monthly P&Ls
+    var month_pnl  = array.new_float(0)
+    var month_time = array.new_int(0)
+    
+    var year_pnl  = array.new_float(0)
+    var year_time = array.new_int(0)
+    
+    last_computed = false
+    
+    if (not na(cur_month_pnl[1]) and (new_month or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(month_pnl)
+            array.pop(month_time)
+            
+        array.push(month_pnl , cur_month_pnl[1])
+        array.push(month_time, time[1])
+    
+    if (not na(cur_year_pnl[1]) and (new_year or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(year_pnl)
+            array.pop(year_time)
+            
+        array.push(year_pnl , cur_year_pnl[1])
+        array.push(year_time, time[1])
+    
+    last_computed := barstate.islastconfirmedhistory ? true : nz(last_computed[1])
+    
+    // Monthly P&L Table    
+    var monthly_table = table(na)
+    
+    if (barstate.islastconfirmedhistory)
+        monthly_table := table.new(performance_table_position, columns = 14, rows = array.size(year_pnl) + 1, border_width = 1)
+    
+        table.cell(monthly_table, 0,  0, "", text_size=performance_text_size,     bgcolor = color.gray)
+        table.cell(monthly_table, 1,  0, "Jan", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 2,  0, "Feb", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 3,  0, "Mar", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 4,  0, "Apr", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 5,  0, "May", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 6,  0, "Jun", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 7,  0, "Jul", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 8,  0, "Aug", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 9,  0, "Sep", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 10, 0, "Oct", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 11, 0, "Nov", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 12, 0, "Dec", text_size=performance_text_size,  bgcolor = color.gray)
+        table.cell(monthly_table, 13, 0, "Year", text_size=performance_text_size, bgcolor = color.gray)
+    
+    
+        for yi = 0 to array.size(year_pnl) - 1
+            table.cell(monthly_table, 0,  yi + 1, str.tostring(year(array.get(year_time, yi))), text_size=performance_text_size, bgcolor = color.gray)
+            
+            y_color = array.get(year_pnl, yi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.gray, transp = 40)
+            table.cell(monthly_table, 13, yi + 1, str.tostring(math.round(array.get(year_pnl, yi) * 100, 1)), bgcolor = y_color, text_size=performance_text_size, text_color=color.new(color.white, 0))
+            
+        for mi = 0 to array.size(month_time) - 1
+            m_row   = year(array.get(month_time, mi))  - year(array.get(year_time, 0)) + 1
+            m_col   = month(array.get(month_time, mi)) 
+            m_color = array.get(month_pnl, mi) > 0 ? color.new(color.teal, transp = 40) : color.new(color.gray, transp = 40)
+            
+            table.cell(monthly_table, m_col, m_row, str.tostring(math.round(array.get(month_pnl, mi) * 100, 1)), bgcolor = m_color, text_size=performance_text_size, text_color=color.new(color.white, 0))

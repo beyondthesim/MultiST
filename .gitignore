@@ -33,3 +33,11 @@ Thumbs.db
 
 # ruff
 .ruff_cache/
+
+# 라이브 봇
+live_bot/state/
+live_bot/logs/
+live_bot/kill.txt
+
+# 임시 출력
+backtest_output.txt

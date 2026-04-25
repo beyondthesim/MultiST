@@ -1,0 +1,81 @@
+"""
+로그 + 알림 (콘솔 + 파일, 텔레그램 옵션)
+
+- INFO: 일반 동작
+- TRADE: 진입/청산/DCA
+- WARN: 안전 한도 근접
+- ERROR: 예외/실패
+- ALERT: 즉시 주의 (kill switch, 한도 도달)
+"""
+import logging
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from live_bot.config import LOG_DIR
+
+
+def _setup_logger() -> logging.Logger:
+    log = logging.getLogger("multist_live")
+    if log.handlers:
+        return log
+
+    log.setLevel(logging.INFO)
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # 콘솔
+    h_con = logging.StreamHandler(sys.stdout)
+    h_con.setFormatter(fmt)
+    log.addHandler(h_con)
+
+    # 파일 (일자별)
+    log_file = LOG_DIR / f"bot_{datetime.utcnow():%Y%m%d}.log"
+    h_file = logging.FileHandler(log_file, encoding="utf-8")
+    h_file.setFormatter(fmt)
+    log.addHandler(h_file)
+
+    return log
+
+
+_log = _setup_logger()
+
+
+def info(msg: str) -> None:
+    _log.info(msg)
+
+
+def trade(msg: str) -> None:
+    _log.info(f"[TRADE] {msg}")
+
+
+def warn(msg: str) -> None:
+    _log.warning(f"[WARN] {msg}")
+
+
+def error(msg: str) -> None:
+    _log.error(f"[ERROR] {msg}")
+
+
+def alert(msg: str) -> None:
+    """긴급 알림 — 텔레그램 토큰 있으면 푸시도 시도"""
+    _log.error(f"[ALERT] {msg}")
+    _try_telegram(f"🚨 {msg}")
+
+
+def _try_telegram(msg: str) -> None:
+    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return
+    try:
+        import urllib.request
+        import urllib.parse
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({"chat_id": chat_id, "text": msg}).encode()
+        urllib.request.urlopen(url, data, timeout=5)
+    except Exception as e:
+        _log.error(f"텔레그램 전송 실패: {e}")

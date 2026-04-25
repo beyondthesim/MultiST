@@ -170,10 +170,12 @@ def print_report(
     ct_trades = ct_trades or []
     initial   = params["initial_capital"]
 
-    ct_cfg    = params.get("counter_trend", {})
-    ct_pct    = ct_cfg.get("equity_pct", 0) if ct_cfg.get("enabled") else 0
-    main_init = initial * (1.0 - ct_pct / 100.0)
-    ct_init   = initial * (ct_pct / 100.0)
+    ct_cfg     = params.get("counter_trend", {})
+    ct_pct     = ct_cfg.get("equity_pct", 0) if ct_cfg.get("enabled") else 0
+    leveraged  = ct_cfg.get("enabled", False) and ct_pct == 0
+    ct_size_pct = ct_cfg.get("ct_size_pct", 100) / 100.0 if ct_cfg.get("enabled") else 1.0
+    main_init  = initial
+    ct_init    = initial * ct_size_pct if leveraged else initial * (ct_pct / 100.0)
 
     m = compute_metrics(main_trades, equity_curve, initial)
 
@@ -189,7 +191,9 @@ def print_report(
     print("=" * 60)
 
     summary = [
-        ["초기 자본 (합산)",  f"{initial:,.2f} USDT  (메인 {main_init:,.0f} + CT {ct_init:,.0f})"],
+        ["초기 자본 (합산)",  f"{initial:,.2f} USDT  "
+                               + (f"(레버리지: 메인 {initial:,.0f} / CT {ct_init:,.0f}={ct_size_pct*100:.0f}%)" if leveraged
+                                  else f"(메인 {main_init:,.0f} + CT {ct_init:,.0f})")],
         ["최종 자산 (합산)",  f"{m['final_equity']:,.2f} USDT"],
         ["총 손익",           f"{m['net_profit_usdt']:+,.2f} USDT  ({m['net_profit_pct']:+.2f}%)"],
         ["최대 자본 감소",    f"{m['max_drawdown_usdt']:,.2f} USDT  ({m['max_drawdown_pct']:.2f}%)"],

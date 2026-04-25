@@ -49,33 +49,63 @@
   "initial_capital": 1000,
   "commission_pct":  0.05,
 
+  "main_position_pct": 200,
+
+  "btc_filter": {
+    "enabled": true,
+    "symbol": "BTC/USDT:USDT",
+    "timeframe": "4h",
+    "ema_length": 50
+  },
+
   "counter_trend": {
     "enabled": true,
-    "equity_pct": 30,
-
+    "equity_pct": 0,
+    "ct_position_pct": 600,
     "rsi_period": 14,
-    "consec_candles": 5,
 
-    "rsi_long_entry1":  22,
-    "rsi_short_entry1": 78,
+    "consec_candles":       4,
+    "consec_candles_long":  5,
+    "consec_candles_short": 4,
 
-    "rsi_long_exit":  60,
-    "rsi_short_exit": 40,
+    "min_candle_pct": 0.0,
 
-    "max_dca": 0,
-    "rsi_long_dca":  [],
-    "rsi_short_dca": [],
+    "ema_filter": {
+      "enabled": true,
+      "length": 30
+    },
 
-    "sl_long_pct":  0.025,
-    "sl_short_pct": 0.025,
+    "divergence_pivot_period": 5,
+    "divergence_max_bars": 60,
 
-    "ct_long_tp": [
-      { "pct": 0.04, "qty_pct": 50  },
-      { "pct": 0.08, "qty_pct": 100 }
-    ],
-    "ct_short_tp": [
-      { "pct": 0.04, "qty_pct": 50  },
-      { "pct": 0.08, "qty_pct": 100 }
-    ]
+    "ct_long_enabled":  true,
+    "ct_short_enabled": true,
+
+    "rsi_long_entry1":  25,
+    "rsi_short_entry1": 65,
+
+    "rsi_long_exit":  65,
+    "rsi_short_exit": 35,
+    "ct_exit_enabled": false,
+
+    "max_dca": 10,
+    "dca_weights": [1, 1, 2, 3, 5, 8, 13, 21, 34, 55],
+
+    "dca_price_pct": 0.015,
+    "dca_require_divergence": false,
+
+    "sl_long_pct":  0.10,
+    "sl_short_pct": 0.10,
+
+    "all_close_pct":    0.10,
+    "safe_close_count": 2,
+    "safe_close_pct":   0.02,
+
+    "ct_bottom_quality_min":       2,
+    "ct_bottom_quality_min_long":  3,
+    "ct_bottom_quality_min_short": 2,
+
+    "ct_long_tp":  [{ "pct": 0.03, "qty_pct": 100 }],
+    "ct_short_tp": [{ "pct": 0.03, "qty_pct": 100 }]
   }
 }
