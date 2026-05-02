@@ -24,7 +24,7 @@
 import time
 from typing import Optional
 
-from live_bot import notifier
+from live_bot import notifier, trade_logger
 from live_bot.exchange import OKXClient
 from live_bot.position_manager import calc_size_in_base
 
@@ -52,6 +52,12 @@ def open_main(
                    f"(명목 ${notional:,.0f}, 자본 ${total_equity:,.0f})")
     client.create_market_order(symbol, side_op, qty, pos_side=side_dir,
                                 client_order_id=f"main_{int(time.time())}")
+    trade_logger.log_event(
+        strategy="main", symbol=symbol, action="entry", direction=side_dir,
+        price=price, qty=qty, notional=notional,
+        entry_seed=state.get("initial_capital"),
+        entry_total_equity=total_equity,
+    )
 
     state["main"] = {
         "side":         side_dir,
@@ -64,7 +70,8 @@ def open_main(
     }
 
 
-def close_main(client: OKXClient, symbol: str, state: dict, reason: str) -> None:
+def close_main(client: OKXClient, symbol: str, state: dict, reason: str,
+                exit_price: Optional[float] = None) -> None:
     """메인 전량 청산"""
     if not state.get("main"):
         return
@@ -73,6 +80,17 @@ def close_main(client: OKXClient, symbol: str, state: dict, reason: str) -> None
     notifier.trade(f"메인 청산 ({reason}): {pos['side'].upper()} qty={pos['entry_size']}")
     client.create_market_order(symbol, side_op, pos["entry_size"], pos_side=pos["side"],
                                 reduce_only=True, client_order_id=f"main_close_{int(time.time())}")
+    if exit_price is not None:
+        pnl = trade_logger.pnl_for(pos["side"], pos["entry_price"], exit_price, pos["entry_size"])
+        seed = state.get("initial_capital")
+        pnl_pct = (pnl / seed * 100) if seed else None
+        trade_logger.log_event(
+            strategy="main", symbol=symbol, action="close", direction=pos["side"],
+            price=exit_price, qty=pos["entry_size"],
+            notional=pos.get("entry_notional", 0),
+            pnl=pnl, reason=reason,
+            entry_seed=seed, pnl_pct=pnl_pct,
+        )
     state["main"] = None
 
 
@@ -89,7 +107,7 @@ def check_main_sl_tp(
 
     # SL 체크
     if (is_long and price <= pos["sl_price"]) or (not is_long and price >= pos["sl_price"]):
-        close_main(client, symbol, state, reason=f"SL @${pos['sl_price']:.4f}")
+        close_main(client, symbol, state, reason=f"SL @${pos['sl_price']:.4f}", exit_price=price)
         return True
 
     # TP 단계 체크 (다단계 부분 청산)
@@ -108,7 +126,20 @@ def check_main_sl_tp(
                                         reduce_only=True,
                                         client_order_id=f"main_tp{i}_{int(time.time())}")
             pos["tp_done"].append(i)
-            if tp["qty_pct"] >= 100:
+            partial_pnl = trade_logger.pnl_for(pos["side"], entry_price, tp_price, qty_close)
+            full_close = tp["qty_pct"] >= 100
+            seed = state.get("initial_capital")
+            partial_pct = (partial_pnl / seed * 100) if seed else None
+            trade_logger.log_event(
+                strategy="main", symbol=symbol,
+                action="close" if full_close else "tp_partial",
+                direction=pos["side"],
+                price=tp_price, qty=qty_close,
+                notional=qty_close * tp_price,
+                pnl=partial_pnl, reason=f"TP{i+1}",
+                entry_seed=seed, pnl_pct=partial_pct,
+            )
+            if full_close:
                 state["main"] = None
                 return True
     return False
@@ -145,6 +176,12 @@ def open_ct(
                    f"(첫진입 ${per_unit_notional:.0f} / 풀 ${full_notional:,.0f})")
     client.create_market_order(symbol, side_op, qty, pos_side=side_dir,
                                 client_order_id=f"ct_{int(time.time())}")
+    trade_logger.log_event(
+        strategy="ct", symbol=symbol, action="entry", direction=side_dir,
+        price=price, qty=qty, notional=per_unit_notional, dca_level=0,
+        entry_seed=state.get("initial_capital"),
+        entry_total_equity=total_equity,
+    )
 
     state["ct"] = {
         "side":              side_dir,
@@ -159,7 +196,8 @@ def open_ct(
     }
 
 
-def close_ct(client: OKXClient, symbol: str, state: dict, reason: str) -> None:
+def close_ct(client: OKXClient, symbol: str, state: dict, reason: str,
+              exit_price: Optional[float] = None) -> None:
     """CT 전량 청산"""
     if not state.get("ct"):
         return
@@ -169,6 +207,17 @@ def close_ct(client: OKXClient, symbol: str, state: dict, reason: str) -> None:
                    f"avg=${pos['avg_price']:.4f} dca={pos['dca_count']}")
     client.create_market_order(symbol, side_op, pos["total_size"], pos_side=pos["side"],
                                 reduce_only=True, client_order_id=f"ct_close_{int(time.time())}")
+    if exit_price is not None:
+        pnl = trade_logger.pnl_for(pos["side"], pos["avg_price"], exit_price, pos["total_size"])
+        seed = state.get("initial_capital")
+        pnl_pct = (pnl / seed * 100) if seed else None
+        trade_logger.log_event(
+            strategy="ct", symbol=symbol, action="close", direction=pos["side"],
+            price=exit_price, qty=pos["total_size"],
+            notional=pos["total_size"] * exit_price,
+            pnl=pnl, reason=reason, dca_level=pos.get("dca_count", 0),
+            entry_seed=seed, pnl_pct=pnl_pct,
+        )
     state["ct"] = None
 
 
@@ -206,6 +255,12 @@ def check_ct_dca(client: OKXClient, symbol: str, params: dict, state: dict,
     notifier.trade(f"CT DCA #{next_idx+1} (weight={weight}): qty={add_qty} @${price:.4f}")
     client.create_market_order(symbol, side_op, add_qty, pos_side=pos["side"],
                                 client_order_id=f"ct_dca{next_idx}_{int(time.time())}")
+    trade_logger.log_event(
+        strategy="ct", symbol=symbol, action="dca", direction=pos["side"],
+        price=price, qty=add_qty, notional=add_notional,
+        dca_level=next_idx + 1,
+        entry_seed=state.get("initial_capital"),
+    )
 
     # 평균단가 갱신
     new_total = pos["total_size"] + add_qty
@@ -231,7 +286,7 @@ def check_ct_sl_tp(client: OKXClient, symbol: str, params: dict, state: dict,
     # SL (평균단가 기준)
     sl_price = avg * ((1 - pos["sl_pct"]) if is_long else (1 + pos["sl_pct"]))
     if (is_long and price <= sl_price) or (not is_long and price >= sl_price):
-        close_ct(client, symbol, state, reason=f"SL @${sl_price:.4f} (avg ${avg:.4f})")
+        close_ct(client, symbol, state, reason=f"SL @${sl_price:.4f} (avg ${avg:.4f})", exit_price=price)
         return True
 
     # TP 다단계 (평균단가 기준)
@@ -248,9 +303,23 @@ def check_ct_sl_tp(client: OKXClient, symbol: str, params: dict, state: dict,
             client.create_market_order(symbol, side_op, qty_close, pos_side=pos["side"],
                                         reduce_only=True,
                                         client_order_id=f"ct_tp{i}_{int(time.time())}")
+            partial_pnl = trade_logger.pnl_for(pos["side"], avg, tp_price, qty_close)
+            full_close = tp["qty_pct"] >= 100 or (pos["total_size"] - qty_close) <= 1e-6
+            seed = state.get("initial_capital")
+            partial_pct = (partial_pnl / seed * 100) if seed else None
+            trade_logger.log_event(
+                strategy="ct", symbol=symbol,
+                action="close" if full_close else "tp_partial",
+                direction=pos["side"],
+                price=tp_price, qty=qty_close,
+                notional=qty_close * tp_price,
+                pnl=partial_pnl, reason=f"TP{i+1}",
+                dca_level=pos.get("dca_count", 0),
+                entry_seed=seed, pnl_pct=partial_pct,
+            )
             pos["tp_done"].append(i)
             pos["total_size"] -= qty_close
-            if tp["qty_pct"] >= 100 or pos["total_size"] <= 1e-6:
+            if full_close:
                 state["ct"] = None
                 return True
     return False

@@ -67,9 +67,9 @@ def process_signals(
     if state.get("main"):
         pos = state["main"]
         if pos["side"] == "long" and signal["close_long"]:
-            oe.close_main(client, symbol, state, reason="ST_FLIP_long")
+            oe.close_main(client, symbol, state, reason="ST_FLIP_long", exit_price=signal["close"])
         elif pos["side"] == "short" and signal["close_short"]:
-            oe.close_main(client, symbol, state, reason="ST_FLIP_short")
+            oe.close_main(client, symbol, state, reason="ST_FLIP_short", exit_price=signal["close"])
 
     # ── (c) CT DCA 체크 ────────────────────────────────────────────
     if state.get("ct"):
@@ -84,9 +84,9 @@ def process_signals(
     if state.get("ct") and ct_cfg.get("ct_exit_enabled", False):
         ctp = state["ct"]
         if ctp["side"] == "long" and signal["ct_close_long"]:
-            oe.close_ct(client, symbol, state, reason="CT_EXIT_long")
+            oe.close_ct(client, symbol, state, reason="CT_EXIT_long", exit_price=signal["close"])
         elif ctp["side"] == "short" and signal["ct_close_short"]:
-            oe.close_ct(client, symbol, state, reason="CT_EXIT_short")
+            oe.close_ct(client, symbol, state, reason="CT_EXIT_short", exit_price=signal["close"])
 
     # ── (f) 메인 신규 진입 ────────────────────────────────────────
     if not state.get("main") and not daily_locked:

@@ -1,11 +1,14 @@
 """
 로그 + 알림 (콘솔 + 파일, 텔레그램 옵션)
 
-- INFO: 일반 동작
-- TRADE: 진입/청산/DCA
-- WARN: 안전 한도 근접
-- ERROR: 예외/실패
-- ALERT: 즉시 주의 (kill switch, 한도 도달)
+- INFO: 일반 동작 (콘솔/파일만, 디스코드 X)
+- TRADE: 진입/청산/DCA (디스코드 — 표준 prefix)
+- WARN: 안전 한도 근접 (콘솔/파일만)
+- ERROR: 예외/실패 (콘솔/파일만)
+- ALERT: 즉시 주의 (kill switch, 한도 도달) — 디스코드
+
+디스코드 송신은 shared/discord_notify로 위임한다. INFO/WARN/ERROR/봇 시작/하트비트는
+디스코드로 보내지 않는다.
 """
 import logging
 import os
@@ -14,6 +17,19 @@ from datetime import datetime
 from pathlib import Path
 
 from live_bot.config import LOG_DIR
+
+# shared 어댑터 경로 확보
+_p = Path(__file__).resolve()
+for _parent in _p.parents:
+    if (_parent / "shared" / "discord_notify.py").exists():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+try:
+    from shared.discord_notify import notify_alert as _dn_alert, notify_info as _dn_info
+    _SHARED_OK = True
+except ImportError:
+    _SHARED_OK = False
 
 
 def _setup_logger() -> logging.Logger:
@@ -57,16 +73,23 @@ def error(msg: str) -> None:
 
 
 def alert(msg: str) -> None:
-    """긴급 알림 — 텔레그램/디스코드 모두 시도"""
+    """긴급 알림 — 표준 디스코드 어댑터로 전송 + 텔레그램 시도"""
     _log.error(f"[ALERT] {msg}")
     _try_telegram(f"🚨 {msg}")
-    _try_discord(f":rotating_light: **ALERT** {msg}")
+    if _SHARED_OK:
+        _dn_alert("MultiST", msg)
 
 
 def trade(msg: str) -> None:
-    """거래 발생 알림 — 디스코드로도 전송"""
+    """거래 발생 알림 — 표준 디스코드 어댑터(info)로 전송.
+
+    호출자가 만든 텍스트(예: '메인 LONG 진입 시도: qty=...')를 그대로 본문으로 보낸다.
+    진입/청산 표준 포맷이 필요한 경우 호출자가 shared.discord_notify.notify_open/close를
+    직접 호출하면 된다.
+    """
     _log.info(f"[TRADE] {msg}")
-    _try_discord(f":moneybag: {msg}")
+    if _SHARED_OK:
+        _dn_info("MultiST", msg)
 
 
 def _try_telegram(msg: str) -> None:
@@ -85,21 +108,6 @@ def _try_telegram(msg: str) -> None:
 
 
 def _try_discord(msg: str) -> None:
-    """DISCORD_URL 환경변수에 웹훅 URL이 있으면 메시지 전송"""
-    url = os.getenv("DISCORD_URL", "").strip().strip('"')
-    if not url:
-        return
-    try:
-        import json as _json
-        import urllib.request
-        data = _json.dumps({"content": msg[:1900]}).encode()
-        req = urllib.request.Request(
-            url, data=data,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent":   "MultiST-LiveBot/1.0 (Python urllib)",
-            },
-        )
-        urllib.request.urlopen(req, timeout=5)
-    except Exception as e:
-        _log.error(f"디스코드 전송 실패: {e}")
+    """[deprecated] shared.discord_notify로 위임됨. 직접 호출되더라도 표준 어댑터 경유."""
+    if _SHARED_OK:
+        _dn_info("MultiST", msg)

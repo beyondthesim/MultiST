@@ -124,6 +124,107 @@ def _add_btc_macro_cols(df_base: pd.DataFrame, btc_df: pd.DataFrame, btc_cfg: di
     return df
 
 
+def build_signals_split_tf(
+    df_base: pd.DataFrame,
+    params: dict,
+    main_tf: str,
+    btc_df=None,
+) -> pd.DataFrame:
+    """
+    Split TF 모드: base = CT TF (낮음, 예: 1m), 메인 신호는 main_tf(예: 12m)에서 계산 후 매핑.
+
+    동작:
+      - 메인 ST/RSI/Grad/entry/close: main_tf로 리샘플 후 계산 → base에 매핑
+        * entry: 메인 봉 확정 후 다음 메인 봉 시작 시점에만 True (no-ffill)
+        * close, st_dir, 필터: 다음 메인 봉까지 ffill (그 동안 SL/TP 평가됨)
+      - CT 신호: base TF에서 직접 계산 (매핑된 메인 ST 방향 사용 → 메인 추세 반대로 진입)
+      - BTC 매크로: 그대로 ffill
+
+    base TF에서 engine이 매 봉마다 SL/TP/CT 평가 → 더 빠른 청산 가능.
+    """
+    df = df_base.copy()
+
+    # ── 1. 메인 TF로 리샘플 ───────────────────────────────────────
+    df_main = _resample_ohlcv(df_base, main_tf)
+
+    # ── 2. 메인 ST/RSI/Grad on main_tf ────────────────────────────
+    st1 = params["st1"]
+    st2 = params["st2"]
+    df_main = add_supertrend_columns(df_main, st1["factor"], st1["atr_period"], prefix="st1")
+    df_main = add_supertrend_columns(df_main, st2["factor"], st2["atr_period"], prefix="st2")
+
+    rsi_cfg = params["rsi_filter"]
+    long_rsi_main, short_rsi_main = compute_rsi_filter_states(
+        df_main["close"],
+        rsi_length    = rsi_cfg["rsi_length"],
+        rsi_ma_length = rsi_cfg["rsi_ma_length"],
+        long_block    = rsi_cfg["long_block"],
+        long_unblock  = rsi_cfg["long_unblock"],
+        short_block   = rsi_cfg["short_block"],
+        short_unblock = rsi_cfg["short_unblock"],
+        enabled       = rsi_cfg["enabled"],
+    )
+    df_main["long_rsi_cond"]  = long_rsi_main
+    df_main["short_rsi_cond"] = short_rsi_main
+
+    grad_cfg = params["grad_filter"]
+    df_main["grad_filter_ok"] = compute_grad_filter(
+        df_main["close"],
+        bb_length     = grad_cfg["bb_length"],
+        bb_mult       = grad_cfg["bb_mult"],
+        threshold_pct = grad_cfg["threshold_pct"],
+        enabled       = grad_cfg["enabled"],
+    )
+
+    # 메인 entry/close 신호 (main_tf에서 계산)
+    df_main["long_entry"] = (
+        (df_main["st1_dir"] < 0) & (df_main["st2_dir"] < 0)
+        & df_main["long_rsi_cond"] & df_main["grad_filter_ok"]
+    )
+    df_main["short_entry"] = (
+        (df_main["st1_dir"] > 0) & (df_main["st2_dir"] > 0)
+        & df_main["short_rsi_cond"] & df_main["grad_filter_ok"]
+    )
+    df_main["close_long"]  = (df_main["st1_dir"] > 0) | (df_main["st2_dir"] > 0)
+    df_main["close_short"] = (df_main["st1_dir"] < 0) | (df_main["st2_dir"] < 0)
+
+    # ── 3. base에 매핑 ───────────────────────────────────────────
+    # entry: shift(1) → 봉 확정 후 다음 봉에 실행. no-ffill (메인 봉 시작 1m 봉에만 True)
+    for col in ("long_entry", "short_entry"):
+        df_main[col] = df_main[col].shift(1).fillna(False)
+        df[col] = (
+            df_main[col]
+            .reindex(df.index)
+            .fillna(False)
+            .astype(bool)
+        )
+
+    # close, st_dir, 필터: ffill (메인 봉 단위로 유지)
+    for col in ("close_long", "close_short", "st1_dir", "st2_dir",
+                "long_rsi_cond", "short_rsi_cond", "grad_filter_ok"):
+        if col.startswith("st") and col.endswith("dir"):
+            df[col] = df_main[col].reindex(df.index, method="ffill").fillna(0)
+        else:
+            df[col] = df_main[col].reindex(df.index, method="ffill").fillna(False).astype(bool)
+
+    # 메인 봉 close 시점 마킹 (engine 옵션: 메인 SL/TP만 이 시점에 평가)
+    df["is_main_close_bar"] = df.index.isin(df_main.index)
+
+    # ── 4. BTC 매크로 ────────────────────────────────────────────
+    btc_cfg = params.get("btc_filter", {})
+    if btc_cfg.get("enabled", False) and btc_df is not None:
+        df = _add_btc_macro_cols(df, btc_df, btc_cfg)
+
+    # ── 5. CT 신호 (base = 1m에서 직접 계산) ─────────────────────
+    # 매핑된 메인 ST(st1_dir, st2_dir) 방향을 그대로 사용 → 메인 추세 반대로 CT 진입
+    ct_cfg = params.get("counter_trend", {})
+    if ct_cfg.get("enabled", False):
+        from indicators.counter_signals import add_counter_signals
+        df = add_counter_signals(df, ct_cfg)
+
+    return df
+
+
 def build_signals(df: pd.DataFrame, params: dict, btc_df=None) -> pd.DataFrame:
     """
     DataFrame에 모든 지표 + 신호 컬럼을 추가하여 반환

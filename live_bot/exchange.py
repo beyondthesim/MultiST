@@ -7,11 +7,20 @@ OKX 거래소 래퍼 (CCXT)
   - 주문 생성/취소 (DRY_RUN 시 로그만)
   - 양방향(hedge) 모드 + 크로스 마진 가정
 """
+import re
 from typing import Optional
 
 import ccxt
 
 from live_bot import config, notifier
+
+
+def _sanitize_clord_id(raw: Optional[str]) -> Optional[str]:
+    """OKX clOrdId 규격(영숫자 1~32자)에 맞게 정리."""
+    if not raw:
+        return None
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", raw)[:32]
+    return cleaned or None
 
 
 class OKXClient:
@@ -102,8 +111,9 @@ class OKXClient:
         params = {"posSide": pos_side, "tdMode": "cross"}
         if reduce_only:
             params["reduceOnly"] = True
-        if client_order_id:
-            params["clOrdId"] = client_order_id
+        safe_id = _sanitize_clord_id(client_order_id)
+        if safe_id:
+            params["clOrdId"] = safe_id
 
         action = f"{side.upper()} {amount} {symbol} (posSide={pos_side}, reduceOnly={reduce_only})"
 

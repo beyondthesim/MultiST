@@ -379,37 +379,40 @@ class BacktestEngine:
                 daily_locked   = False
 
             # ── 메인 포지션 처리 ──────────────────────────────────────
+            # split mode 옵션: 메인 SL/TP/ST_FLIP를 메인 봉 close 시점에만 평가
+            main_eval_ok = bar.get("is_main_close_bar", True)
             if position is not None:
-                self._process_tp(position, bar, ts)
+                if main_eval_ok:
+                    self._process_tp(position, bar, ts)
 
-                if not position.is_open:
-                    position.close_reason = "TP_FULL"
-                    main_equity += position.net_pnl
-                    main_trades.append(position.to_dict())
-                    position = None
-
-                if position is not None:
-                    if position.direction == 1:
-                        sl_hit = bar["close"] < position.entry_price * (1 - long_sl_pct)
-                    else:
-                        sl_hit = bar["close"] > position.entry_price * (1 + short_sl_pct)
-
-                    if sl_hit:
-                        position.close_full(bar["close"], "SL", ts)
+                    if not position.is_open:
+                        position.close_reason = "TP_FULL"
                         main_equity += position.net_pnl
                         main_trades.append(position.to_dict())
                         position = None
 
-                if position is not None:
-                    st_flip = (
-                        (position.direction == 1  and bar["close_long"])  or
-                        (position.direction == -1 and bar["close_short"])
-                    )
-                    if st_flip:
-                        position.close_full(bar["close"], "ST_FLIP", ts)
-                        main_equity += position.net_pnl
-                        main_trades.append(position.to_dict())
-                        position = None
+                    if position is not None:
+                        if position.direction == 1:
+                            sl_hit = bar["close"] < position.entry_price * (1 - long_sl_pct)
+                        else:
+                            sl_hit = bar["close"] > position.entry_price * (1 + short_sl_pct)
+
+                        if sl_hit:
+                            position.close_full(bar["close"], "SL", ts)
+                            main_equity += position.net_pnl
+                            main_trades.append(position.to_dict())
+                            position = None
+
+                    if position is not None:
+                        st_flip = (
+                            (position.direction == 1  and bar["close_long"])  or
+                            (position.direction == -1 and bar["close_short"])
+                        )
+                        if st_flip:
+                            position.close_full(bar["close"], "ST_FLIP", ts)
+                            main_equity += position.net_pnl
+                            main_trades.append(position.to_dict())
+                            position = None
 
             # ── 역추세 포지션 처리 ────────────────────────────────────
             if ct_enabled and ct_position is not None:
